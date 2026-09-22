@@ -50,7 +50,9 @@ panehost/
 
 - **Direct UI↔hostd data path.** The Tauri process never relays terminal bytes, so an app crash cannot affect shells and there is no extra hop on keystrokes.
 - **Discovery.** hostd binds `127.0.0.1` on an OS-assigned port and writes `%APPDATA%\Panehost\hostd.json` = `{port, token, pid, protocolVersion}` (token: 32 random bytes, hex; file written atomically). The app reads it, verifies the pid is alive and the version matches, and otherwise spawns hostd (detached, no console window).
-- **Auth.** Every WebSocket connection must send `Hello{token, protocolVersion}` first; any other first frame or a bad token closes the socket. The hook endpoint (`POST /hook`) requires the same token, which hostd injects into each PTY's env as `PANEHOST_TOKEN` alongside `PANEHOST_PORT` and `PANEHOST_PANE_ID`.
+- **Auth — two token classes.**
+  - **Control token** (in `hostd.json`): required by every WebSocket, which must send `Hello{token, protocolVersion}` first; any other first frame or a bad token closes the socket. It **never** enters a PTY environment — anything running inside a pane (an agent, its tools, an npm script) must not be able to spawn panes or type into other panes.
+  - **Hook token** (per pane): hostd mints a fresh random token for each pane at spawn and injects it as `PANEHOST_HOOK_TOKEN`, alongside `PANEHOST_PORT` and `PANEHOST_PANE_ID`. It is accepted **only** by `POST /hook`, and only for events naming that same pane id, so a process in pane A can neither reach the control channel nor forge status for pane B. The WebSocket rejects hook tokens.
 - **Single instance.** hostd holds a per-user named mutex `Local\PanehostHostd-<hash of data dir>` (per-session namespace so other Windows users are unaffected; the data-dir hash lets test instances with `PANEHOST_DATA_DIR` run alongside the real one); the app uses Tauri's single-instance plugin.
 - **Version skew.** hostd outlives app updates. On mismatch the UI shows "Restart the service to update — N sessions will be resumed/relaunched" and never restarts hostd without confirmation.
 
@@ -64,7 +66,7 @@ panehost/
 ### Spawn
 
 1. UI sends `Spawn{title, cwd, command, kind: claude|shell, shell: powershell|cmd|wsl(distro), workspace?}`.
-2. hostd creates the ConPTY with the three `PANEHOST_*` env vars, records the pane, persists pane metadata, and broadcasts `PaneAdded`.
+2. hostd creates the ConPTY with `PANEHOST_PANE_ID`, `PANEHOST_PORT` and that pane's `PANEHOST_HOOK_TOKEN` (never the control token), records the pane, persists pane metadata, and broadcasts `PaneAdded`.
 3. PTY output is coalesced in ~8 ms batches, appended to the pane's ring buffer, and fanned out as binary `Output` frames to every client attached to that pane.
 
 A `kind: claude` pane runs `claude` (plus any user args) inside the chosen shell.
@@ -88,7 +90,7 @@ The state machine is a pure function `(state, event) → state` with no I/O, uni
 ### Claude hooks integration
 
 - **Opt-in install:** Settings → "Install Claude hooks" merges `panehost-hook.exe` entries for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Notification`, `Stop` into `~/.claude/settings.json`. It preserves existing hooks, writes a timestamped backup first, validates the merged JSON, and writes atomically (temp + rename). "Uninstall" removes only Panehost entries.
-- **Delivery:** the hook reads stdin JSON, adds `pane_id`, POSTs to `http://127.0.0.1:$PANEHOST_PORT/hook` with the token; 200 ms total timeout; exit 0 on every path. Sessions not started by Panehost lack `PANEHOST_PANE_ID` and the hook exits immediately.
+- **Delivery:** the hook reads stdin JSON, adds `pane_id`, POSTs to `http://127.0.0.1:$PANEHOST_PORT/hook` with `Authorization: Bearer $PANEHOST_HOOK_TOKEN`; hostd answers 401 unless the token matches the hook token of the pane named in the body; 200 ms total timeout; exit 0 on every path. Sessions not started by Panehost lack `PANEHOST_PANE_ID` and the hook exits immediately.
 - **Session metadata:** `SessionStart` supplies `session_id` and `transcript_path`, stored on the pane and persisted (enables resume).
 - **Tokens and cost:** hostd tails the transcript JSONL incrementally (tracking byte offset), sums `usage` input/output/cache tokens per model, and computes cost from a built-in price table. Cost is always labeled "≈ estimated". Unknown models show tokens only.
 
@@ -183,7 +185,7 @@ All under `%APPDATA%\Panehost\`: `hostd.json` (discovery), `settings.json` (UI +
 
 - **protocol:** serde round-trip for every message; CI check that generated TS types are current.
 - **hostd unit:** state machine (every transition + unexpected-event sequences), ring buffer (wraparound, replay correctness), Claude settings merge (existing hooks preserved, idempotent install, clean uninstall), transcript token/cost parsing against sample JSONL fixtures (including incremental tailing from a byte offset), port-to-process-tree attribution.
-- **hostd integration:** start a real hostd on a temp `%APPDATA%`; over WebSocket: auth rejection, spawn `cmd /c echo hello`, attach and read output, detach + reattach replay, resize, kill, `POST /hook` drives state changes.
+- **hostd integration:** start a real hostd on a temp `%APPDATA%`; over WebSocket: auth rejection, spawn `cmd /c echo hello`, attach and read output, detach + reattach replay, resize, kill, `POST /hook` drives state changes; token isolation — a pane's environment contains no control token, a hook token cannot open the WebSocket, and pane A's hook token is refused for pane B's events.
 - **hook:** exits 0 in <200 ms with hostd down; delivers the event with hostd up; no-op without `PANEHOST_PANE_ID`.
 - **ui:** Vitest for grid-geometry math, status reducer, and keyboard routing; Playwright against a fake hostd for zoom, drawer, broadcast, waiting-pane navigation, and reconnect banner.
 - **Manual acceptance (v1 exit):** the five success criteria in §1, run on this machine.

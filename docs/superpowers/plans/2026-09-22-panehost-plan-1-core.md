@@ -25,7 +25,7 @@
 - Discovery file: `<data dir>\hostd.json` = `{port, token, pid, protocol_version}`, written atomically (temp + rename).
 - Ring buffer: 4 MB per pane (`4 << 20`). Output batches: ≤16 KB or 8 ms. Per-pane output broadcast capacity: 64 batches (~1 MB lag budget) → overflow triggers reset + replay.
 - Wire format: control = JSON text frames, tagged `{"type": ...}`, snake_case fields. Terminal data = binary frames `[16-byte pane UUID][payload]` both directions.
-- Env injected into every PTY: `PANEHOST_PANE_ID`, `PANEHOST_PORT`, `PANEHOST_TOKEN`.
+- Env injected into every PTY: `PANEHOST_PANE_ID`, `PANEHOST_PORT`, `PANEHOST_HOOK_TOKEN` (per-pane, hook-only). The **control token never enters a PTY** — it lives only in `hostd.json` and hostd's memory, so nothing running inside a pane can open the control WebSocket.
 - Single-instance mutex: `Local\PanehostHostd-<hash of data dir>`.
 - Fonts bundled (no network): Inter (UI), JetBrains Mono (terminals). Dark theme only in Plan 1; all colors as CSS custom properties on `:root`.
 - Motion ≤150 ms; respect `prefers-reduced-motion`.
@@ -993,13 +993,15 @@ git commit -m "feat(hostd): shell command builder for powershell, cmd, wsl"
 **Interfaces:**
 - Consumes: `RingBuffer` (Task 3), `next_batch` (Task 3), `build_command`, `resolve_cwd` (Task 4), protocol types.
 - Produces (`hostd::registry`):
-  - `pub struct RegistryConfig { pub ring_capacity: usize, pub env: Vec<(String, String)> }`
+  - `pub struct RegistryConfig { pub ring_capacity: usize, pub hostd_port: u16 }` — deliberately no free-form env: the control token must never be passable into a PTY.
   - `pub const DEFAULT_COLS: u16 = 120; pub const DEFAULT_ROWS: u16 = 32;`
   - `impl Registry`: `fn new(config: RegistryConfig) -> Arc<Registry>` (must be called inside a tokio runtime), `fn subscribe_events(&self) -> broadcast::Receiver<ServerMsg>`, `fn list(&self) -> Vec<PaneInfo>`, `fn get(&self, id: PaneId) -> Option<Arc<Pane>>`, `fn spawn(self: &Arc<Self>, req: SpawnRequest) -> PaneInfo`, `fn write(&self, id: PaneId, data: &[u8]) -> anyhow::Result<()>`, `fn resize(&self, id: PaneId, cols: u16, rows: u16) -> anyhow::Result<()>`, `fn kill(&self, id: PaneId) -> anyhow::Result<()>`, `fn remove(&self, id: PaneId) -> anyhow::Result<()>`.
-  - `impl Pane`: `fn id(&self) -> PaneId`, `fn info(&self) -> PaneInfo`, `fn attach(&self) -> (Vec<u8>, broadcast::Receiver<bytes::Bytes>)` (history snapshot + live stream, atomic: no gap, no duplicate), `fn write(&self, data: &[u8])`, `fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()>`, `fn kill(&self) -> anyhow::Result<()>`.
+  - `impl Pane`: `fn id(&self) -> PaneId`, `fn info(&self) -> PaneInfo`, `fn attach(&self) -> (Vec<u8>, broadcast::Receiver<bytes::Bytes>)` (history snapshot + live stream, atomic: no gap, no duplicate), `fn write(&self, data: &[u8])`, `fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()>`, `fn kill(&self) -> anyhow::Result<()>`, `fn hook_token(&self) -> &str`, `fn hook_token_matches(&self, candidate: &str) -> bool` (constant-time; Plan 2's `POST /hook` uses it).
+  - PTY environment: exactly `PANEHOST_PANE_ID`, `PANEHOST_PORT`, `PANEHOST_HOOK_TOKEN` (fresh 64-hex token per pane) are added, and any inherited `PANEHOST_TOKEN` is removed.
   - Events emitted: `PaneAdded` on spawn, `PaneUpdated` on status change, `PaneRemoved` on remove.
 
 Design notes for the implementer:
+- **Token isolation (security):** the control token lives only in `hostd.json` and the server. Each pane gets its own hook token that Plan 2's `POST /hook` accepts only for that pane's events; the WebSocket never accepts it. A process inside a pane therefore cannot spawn panes, type into other panes, or forge another pane's status.
 - A failed spawn (bad cwd, missing program) still creates a pane, with `status: Error{message}` and no I/O — the UI shows the error inline.
 - Background work per pane: a **reader thread** (blocking PTY reads → tokio mpsc), a **coalescer task** (`next_batch` → ring + broadcast), a **writer thread** (std mpsc → PTY), an **exit-watcher thread** (`child.wait()` → `Exited{code}`).
 - The coalescer and exit watcher hold `Weak` refs so removing a pane actually drops it (dropping the master closes the pseudoconsole, which ends the reader thread).
@@ -1017,11 +1019,10 @@ use panehost_protocol::{PaneId, PaneKind, PaneStatus, ServerMsg, ShellSpec, Spaw
 use tokio::sync::broadcast::error::RecvError;
 use tokio::time::timeout;
 
+const TEST_PORT: u16 = 45678;
+
 fn registry() -> Arc<Registry> {
-    Registry::new(RegistryConfig {
-        ring_capacity: 1 << 20,
-        env: vec![("PANEHOST_TEST_VAR".into(), "from-registry".into())],
-    })
+    Registry::new(RegistryConfig { ring_capacity: 1 << 20, hostd_port: TEST_PORT })
 }
 
 fn cmd_request(kind: PaneKind, command: Option<&str>) -> SpawnRequest {
@@ -1068,13 +1069,44 @@ async fn status_until(reg: &Registry, id: PaneId, pred: impl Fn(&PaneStatus) -> 
 #[tokio::test(flavor = "multi_thread")]
 async fn output_env_and_exit_code_reach_the_pane() {
     let reg = registry();
-    let info = reg.spawn(cmd_request(PaneKind::Claude, Some("echo %PANEHOST_TEST_VAR% %PANEHOST_PANE_ID%")));
+    let info = reg.spawn(cmd_request(
+        PaneKind::Claude,
+        Some("echo port=%PANEHOST_PORT% hook=%PANEHOST_HOOK_TOKEN% id=%PANEHOST_PANE_ID%"),
+    ));
     assert_eq!(info.status, PaneStatus::Running);
     let pane = reg.get(info.id).unwrap();
-    let text = output_until(&pane, &info.id.to_string()).await;
-    assert!(text.contains("from-registry"), "configured env missing: {text:?}");
+    let text = output_until(&pane, &format!("id={}", info.id)).await;
+    assert!(text.contains(&format!("port={TEST_PORT}")), "PANEHOST_PORT missing: {text:?}");
+    assert!(text.contains(&format!("hook={}", pane.hook_token())), "PANEHOST_HOOK_TOKEN missing: {text:?}");
     let status = status_until(&reg, info.id, |s| matches!(s, PaneStatus::Exited { .. })).await;
     assert_eq!(status, PaneStatus::Exited { code: 0 });
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pane_env_never_contains_a_control_token() {
+    let reg = registry();
+    // %OS% expands only when the branch runs, so the needle cannot come from an echo of the command.
+    let info = reg.spawn(cmd_request(
+        PaneKind::Claude,
+        Some("if defined PANEHOST_TOKEN (echo leak-%OS%) else (echo clean-%OS%)"),
+    ));
+    let text = output_until(&reg.get(info.id).unwrap(), "-Windows_NT").await;
+    assert!(text.contains("clean-Windows_NT"), "PANEHOST_TOKEN reached the pane: {text:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_tokens_are_unique_per_pane_and_checked_exactly() {
+    let reg = registry();
+    let a = reg.get(reg.spawn(cmd_request(PaneKind::Shell, None)).id).unwrap();
+    let b = reg.get(reg.spawn(cmd_request(PaneKind::Shell, None)).id).unwrap();
+    assert_eq!(a.hook_token().len(), 64);
+    assert_ne!(a.hook_token(), b.hook_token());
+    assert!(a.hook_token_matches(a.hook_token()));
+    assert!(!a.hook_token_matches(b.hook_token()), "pane A must reject pane B's token");
+    assert!(!a.hook_token_matches(""));
+    assert!(!a.hook_token_matches(&a.hook_token()[..63]));
+    reg.kill(a.id()).unwrap();
+    reg.kill(b.id()).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1167,10 +1199,11 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 const BATCH_MAX_BYTES: usize = 16 * 1024;
 const BATCH_WINDOW: Duration = Duration::from_millis(8);
 
+/// No free-form env on purpose: the control token must never be passable into a PTY.
 pub struct RegistryConfig {
     pub ring_capacity: usize,
-    /// Extra environment for every PTY (hostd port/token for the Claude hook).
-    pub env: Vec<(String, String)>,
+    /// Exposed to panes as PANEHOST_PORT so the Claude hook can reach `POST /hook`.
+    pub hostd_port: u16,
 }
 
 pub struct Registry {
@@ -1182,6 +1215,8 @@ pub struct Registry {
 
 pub struct Pane {
     id: PaneId,
+    /// Per-pane secret for `POST /hook` only; never accepted by the WebSocket.
+    hook_token: String,
     info: Mutex<PaneInfo>,
     output: Mutex<Output>,
     io: Option<PaneIo>,
@@ -1233,6 +1268,7 @@ impl Registry {
 
     pub fn spawn(self: &Arc<Self>, req: SpawnRequest) -> PaneInfo {
         let id = Uuid::new_v4();
+        let hook_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let cwd = resolve_cwd(&req.cwd);
         let mut info = PaneInfo {
             id,
@@ -1246,7 +1282,7 @@ impl Registry {
             rows: DEFAULT_ROWS,
         };
 
-        let (io, pumps) = match self.start_process(id, &req, &cwd) {
+        let (io, pumps) = match self.start_process(id, &hook_token, &req, &cwd) {
             Ok(s) => {
                 let (input_tx, input_rx) = std_mpsc::channel();
                 let io = PaneIo {
@@ -1266,6 +1302,7 @@ impl Registry {
         let (tx, _) = broadcast::channel(OUTPUT_CHANNEL_CAPACITY);
         let pane = Arc::new(Pane {
             id,
+            hook_token,
             info: Mutex::new(info.clone()),
             output: Mutex::new(Output { ring: RingBuffer::new(self.config.ring_capacity), tx }),
             io,
@@ -1313,7 +1350,7 @@ impl Registry {
         let _ = self.events.send(ServerMsg::PaneUpdated { pane: info });
     }
 
-    fn start_process(&self, id: PaneId, req: &SpawnRequest, cwd: &Path) -> Result<Started> {
+    fn start_process(&self, id: PaneId, hook_token: &str, req: &SpawnRequest, cwd: &Path) -> Result<Started> {
         anyhow::ensure!(cwd.is_dir(), "working directory not found: {}", cwd.display());
         let pair = native_pty_system()
             .openpty(PtySize { rows: DEFAULT_ROWS, cols: DEFAULT_COLS, pixel_width: 0, pixel_height: 0 })
@@ -1324,9 +1361,10 @@ impl Registry {
         cmd.args(&shell.args);
         cmd.cwd(cwd);
         cmd.env("PANEHOST_PANE_ID", id.to_string());
-        for (key, value) in &self.config.env {
-            cmd.env(key, value);
-        }
+        cmd.env("PANEHOST_PORT", self.config.hostd_port.to_string());
+        cmd.env("PANEHOST_HOOK_TOKEN", hook_token);
+        // Defence in depth: never let a control token inherited by hostd leak into a pane.
+        cmd.env_remove("PANEHOST_TOKEN");
 
         let child = pair.slave.spawn_command(cmd).with_context(|| format!("failed to start {}", shell.program))?;
         drop(pair.slave);
@@ -1401,6 +1439,16 @@ impl Pane {
         self.id
     }
 
+    pub fn hook_token(&self) -> &str {
+        &self.hook_token
+    }
+
+    /// Constant-time comparison so response timing reveals nothing about the token.
+    pub fn hook_token_matches(&self, candidate: &str) -> bool {
+        let (a, b) = (self.hook_token.as_bytes(), candidate.as_bytes());
+        a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    }
+
     pub fn info(&self) -> PaneInfo {
         self.info.lock().unwrap().clone()
     }
@@ -1451,7 +1499,7 @@ impl Pane {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p panehost-hostd --test registry`
-Expected: 5 tests PASS. If `output_env_and_exit_code_reach_the_pane` times out, print the captured `text` — ConPTY occasionally inserts cursor-movement sequences; the needles are chosen to be short and unbroken, so a failure here indicates a real read-path bug, not flakiness.
+Expected: 7 tests PASS. If `output_env_and_exit_code_reach_the_pane` times out, print the captured `text` — ConPTY occasionally inserts cursor-movement sequences; the needles are chosen to be short and unbroken, so a failure here indicates a real read-path bug, not flakiness.
 
 - [ ] **Step 5: Run the whole crate's tests**
 
@@ -1509,12 +1557,16 @@ const TOKEN: &str = "test-token";
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 async fn start() -> SocketAddr {
-    let registry = Registry::new(RegistryConfig { ring_capacity: 1 << 20, env: vec![] });
+    start_with_registry().await.0
+}
+
+async fn start_with_registry() -> (SocketAddr, Arc<Registry>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = Arc::new(ServerState { registry, token: TOKEN.into() });
+    let registry = Registry::new(RegistryConfig { ring_capacity: 1 << 20, hostd_port: addr.port() });
+    let state = Arc::new(ServerState { registry: registry.clone(), token: TOKEN.into() });
     tokio::spawn(async move { serve(listener, state).await });
-    addr
+    (addr, registry)
 }
 
 async fn connect(addr: SocketAddr) -> Ws {
@@ -1592,6 +1644,20 @@ async fn bad_token_is_disconnected_without_welcome() {
     send(&mut ws, &ClientMsg::Hello { token: "wrong".into(), protocol_version: PROTOCOL_VERSION }).await;
     let next = timeout(Duration::from_secs(5), ws.next()).await.expect("server should close promptly");
     assert!(!matches!(next, Some(Ok(Message::Text(_)))), "must not receive control messages: {next:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_panes_hook_token_cannot_open_the_control_channel() {
+    let (addr, registry) = start_with_registry().await;
+    let mut ws = connect(addr).await;
+    hello(&mut ws).await;
+    let pane = spawn_cmd(&mut ws).await;
+    let hook_token = registry.get(pane).unwrap().hook_token().to_string();
+
+    let mut intruder = connect(addr).await;
+    send(&mut intruder, &ClientMsg::Hello { token: hook_token, protocol_version: PROTOCOL_VERSION }).await;
+    let next = timeout(Duration::from_secs(5), intruder.next()).await.expect("server should close promptly");
+    assert!(!matches!(next, Some(Ok(Message::Text(_)))), "hook token must not authenticate: {next:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1943,7 +2009,7 @@ fn text(msg: &ServerMsg) -> Message {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p panehost-hostd --test server`
-Expected: 6 tests PASS.
+Expected: 7 tests PASS.
 
 - [ ] **Step 5: Run the whole crate and clippy**
 
@@ -2127,10 +2193,8 @@ async fn run(dir: PathBuf) -> Result<()> {
     let port = listener.local_addr()?.port();
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
 
-    let registry = Registry::new(RegistryConfig {
-        ring_capacity: RING_CAPACITY,
-        env: vec![("PANEHOST_PORT".into(), port.to_string()), ("PANEHOST_TOKEN".into(), token.clone())],
-    });
+    // The control token goes to the server and hostd.json only — never into pane environments.
+    let registry = Registry::new(RegistryConfig { ring_capacity: RING_CAPACITY, hostd_port: port });
     DiscoveryInfo { port, token: token.clone(), pid: std::process::id(), protocol_version: PROTOCOL_VERSION }
         .write(&dir)?;
     tracing::info!(port, pid = std::process::id(), "hostd listening");
@@ -4458,7 +4522,8 @@ git commit -m "docs: README with dev workflow and hostd operations"
 | §3 Version skew | `VersionMismatch` + fatal banner (Tasks 6, 10) | Restart-with-resume flow → Plan 3 |
 | §4 Spawn, attach/reattach, redraw nudge, backpressure resync | Tasks 5, 6, 11 | — |
 | §4 Pane state machine | shell states (running/exited/error) | claude states, `active` pulse → Plan 2 |
-| §4 Claude hooks, tokens/cost, alerts | env vars injected (Task 7) | → Plan 2 |
+| §3 Auth — two token classes | control token WebSocket-only; per-pane hook token minted and injected, control token kept out of PTYs, both enforced by tests (Tasks 5, 6) | `POST /hook` verifying the hook token → Plan 2 |
+| §4 Claude hooks, tokens/cost, alerts | `PANEHOST_*` env injected (Task 5) | → Plan 2 |
 | §4 Broadcast, snippets, workspaces, window lifecycle (tray) | — | → Plans 2–3 |
 | §5 UI: auto-grid, zoom, pane header, Alt+N, Ctrl+Shift+T, fonts, dark tokens, motion | Tasks 9, 11 | drawer, palette, waiting emphasis, overflow strip, reorder, light theme → Plans 2–3 |
 | §6 Persistence | `hostd.json`, logs | settings/workspaces/snippets/panes.json → Plan 3 |
