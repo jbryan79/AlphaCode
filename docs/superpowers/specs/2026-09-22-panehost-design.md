@@ -51,7 +51,7 @@ panehost/
 - **Direct UI↔hostd data path.** The Tauri process never relays terminal bytes, so an app crash cannot affect shells and there is no extra hop on keystrokes.
 - **Discovery.** hostd binds `127.0.0.1` on an OS-assigned port and writes `%APPDATA%\Panehost\hostd.json` = `{port, token, pid, protocolVersion}` (token: 32 random bytes, hex; file written atomically). The app reads it, verifies the pid is alive and the version matches, and otherwise spawns hostd (detached, no console window).
 - **Auth.** Every WebSocket connection must send `Hello{token, protocolVersion}` first; any other first frame or a bad token closes the socket. The hook endpoint (`POST /hook`) requires the same token, which hostd injects into each PTY's env as `PANEHOST_TOKEN` alongside `PANEHOST_PORT` and `PANEHOST_PANE_ID`.
-- **Single instance.** hostd holds a named mutex `Global\PanehostHostd`; the app uses Tauri's single-instance plugin.
+- **Single instance.** hostd holds a per-user named mutex `Local\PanehostHostd-<hash of data dir>` (per-session namespace so other Windows users are unaffected; the data-dir hash lets test instances with `PANEHOST_DATA_DIR` run alongside the real one); the app uses Tauri's single-instance plugin.
 - **Version skew.** hostd outlives app updates. On mismatch the UI shows "Restart the service to update — N sessions will be resumed/relaunched" and never restarts hostd without confirmation.
 
 ### Wire format
