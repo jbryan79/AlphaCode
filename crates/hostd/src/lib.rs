@@ -2,3 +2,4 @@
 
 pub mod coalesce;
 pub mod ring;
+pub mod shell;
