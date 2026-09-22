@@ -1,7 +1,11 @@
 //! Wire contract shared by hostd, the Tauri app, and (via ts-rs) the UI.
 
+mod discovery;
+mod frame;
 mod messages;
 
+pub use discovery::*;
+pub use frame::*;
 pub use messages::*;
 
 /// Bump on any incompatible change to messages or frames.
