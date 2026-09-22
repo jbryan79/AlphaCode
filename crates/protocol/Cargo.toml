@@ -1,0 +1,14 @@
+[package]
+name = "panehost-protocol"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+ts-rs.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
