@@ -204,12 +204,14 @@ From left to right in the header:
   confirm if the session is running.
 
 Directly under the header is the **working directory strip**. Click it to pick a different
-folder for this pane. Changing the folder stops a running session, because the directory is
-fixed at launch; press Start to relaunch in the new folder.
+folder for this pane. A process's directory is fixed at launch, so if the session is running
+you are asked to confirm, the old shell ends, and a fresh one starts in the new folder on a
+cleared screen. If the pane was not running, the new folder is used the next time you start it.
 
 The **footer** shows the kind of session and has **Clear** (clears the terminal screen
 without touching the process) and either **Stop** (ends the process) or **Restart**
-(launches a new process when nothing is running).
+(launches a new process when nothing is running). Every new process starts on a cleared
+screen; output from the previous process is not kept.
 
 Before a terminal pane has started, or after it stops, a message panel sits over the
 terminal with a **Start session** button. Panes with auto-start on skip this at load time.
@@ -247,8 +249,11 @@ to press Start. Admin PowerShell can never auto-start. Duplicated and imported p
 start with this off.
 
 **Apply changes.** If you changed the type, directory, executable, or arguments while the
-session was running, the session is stopped (after a confirmation) and the pane returns to
-the Start state. Name and auto-start changes apply without interrupting anything.
+session was running, you are asked to confirm, the session is stopped, and a new one is
+started with the new settings on a cleared screen. Admin PowerShell is the exception: it is
+stopped and waits for you to press Start with UAC again, so no elevation prompt appears
+without you asking for it. Name, accent color, and auto-start changes apply without
+interrupting anything.
 
 ### Pane types
 

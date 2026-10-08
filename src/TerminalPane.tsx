@@ -5,12 +5,12 @@ import { Play, RotateCcw, Square, Shield } from 'lucide-react';
 import type { PaneConfig, SessionStatus } from '../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
-export default function TerminalPane({pane,status,focused,message,onError}: {pane:PaneConfig;status:SessionStatus;focused:boolean;message?:string;onError:(s:string)=>void}) {
+export default function TerminalPane({pane,status,focused,message,relaunch=0,onError}: {pane:PaneConfig;status:SessionStatus;focused:boolean;message?:string;relaunch?:number;onError:(s:string)=>void}) {
   const host=useRef<HTMLDivElement>(null),terminal=useRef<Terminal|null>(null),fit=useRef<FitAddon|null>(null),config=useRef(pane);
   const [launching,setLaunching]=useState(false); config.current=pane;
   const start=async()=>{
     if(launching)return; setLaunching(true);
-    try{ fit.current?.fit(); await window.bridge.startSession(config.current,terminal.current?.cols||80,terminal.current?.rows||24); }
+    try{ terminal.current?.reset(); fit.current?.fit(); await window.bridge.startSession(config.current,terminal.current?.cols||80,terminal.current?.rows||24); }
     catch(e){onError(String(e));} finally{setLaunching(false);}
   };
   useEffect(()=>{
@@ -37,6 +37,7 @@ export default function TerminalPane({pane,status,focused,message,onError}: {pan
     return()=>{unsubscribe();input.dispose();observer.disconnect();term.dispose();terminal.current=null;};
   },[]);
   useEffect(()=>{if(focused)terminal.current?.focus();},[focused]);
+  useEffect(()=>{if(relaunch)void start();},[relaunch]);
   const active=['running','starting'].includes(status)||launching;
   return <div className="terminal-content">
     <div ref={host} className="xterm-host" aria-label={`${pane.title} terminal`} />

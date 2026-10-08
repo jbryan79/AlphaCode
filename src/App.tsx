@@ -17,7 +17,7 @@ function NameDialog({title,initial,onSave,onClose}: {title:string;initial:string
 }
 export default function App() {
   const [state,setState]=useState<AppState|null>(null),[statuses,setStatuses]=useState<Record<string,SessionEvent>>({}),[focused,setFocused]=useState(''),[maximized,setMaximized]=useState('');
-  const [editor,setEditor]=useState<PaneConfig|null>(null),[profileEditor,setProfileEditor]=useState<LocalProfile|null>(null),[nameDialog,setNameDialog]=useState<'rename'|'save-as'|null>(null),[addOpen,setAddOpen]=useState(false),[sidebar,setSidebar]=useState(true),[moveMode,setMoveMode]=useState<'reflow'|'swap'>('reflow'),[notice,setNotice]=useState(''),[saveLabel,setSaveLabel]=useState('Saved locally'),[width,setWidth]=useState(1100),[viewport,setViewport]=useState(850),[statePath,setStatePath]=useState('');
+  const [relaunch,setRelaunch]=useState<Record<string,number>>({}),[editor,setEditor]=useState<PaneConfig|null>(null),[profileEditor,setProfileEditor]=useState<LocalProfile|null>(null),[nameDialog,setNameDialog]=useState<'rename'|'save-as'|null>(null),[addOpen,setAddOpen]=useState(false),[sidebar,setSidebar]=useState(true),[moveMode,setMoveMode]=useState<'reflow'|'swap'>('reflow'),[notice,setNotice]=useState(''),[saveLabel,setSaveLabel]=useState('Saved locally'),[width,setWidth]=useState(1100),[viewport,setViewport]=useState(850),[statePath,setStatePath]=useState('');
   const gridHost=useRef<HTMLDivElement>(null),dragOrigin=useRef<GridItem[]>([]),stateRef=useRef(state);stateRef.current=state;
   const workspace=state?.workspaces.find(w=>w.id===state.activeWorkspaceId);
   const report=(message:string)=>setNotice(message.replace(/^Error:\s*/,''));
@@ -48,9 +48,11 @@ export default function App() {
   const savePane=async(p:PaneConfig)=>{
     const old=workspace?.panes.find(x=>x.id===p.id);if(!old)return;
     const launchChanged=old.type!==p.type||old.cwd!==p.cwd||old.command!==p.command||JSON.stringify(old.args)!==JSON.stringify(p.args);
-    if(launchChanged&&isActive(p.id)&&!window.confirm('Apply this configuration and stop the current session?'))return;
+    const wasActive=isActive(p.id),restartable=p.type!=='powershell-admin'&&p.type!=='local-model';
+    if(launchChanged&&wasActive&&!window.confirm(restartable?'Apply this configuration? The current session ends and a new one starts in its place.':'Apply this configuration and stop the current session?'))return;
     try{if(launchChanged){await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status:'idle'}}));}
       update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?p:x)}));setEditor(null);
+      if(launchChanged&&wasActive&&restartable)setRelaunch(r=>({...r,[p.id]:(r[p.id]||0)+1}));
     }catch(e){report(String(e));}
   };
   const add=(type:PaneType,cwd?:string)=>{
@@ -109,7 +111,7 @@ export default function App() {
           {workspace.panes.map(p=><div key={p.id} id={`pane-${p.id}`} data-pane-id={p.id} data-pane-title={p.title} data-color={p.color||''} className={`pane ${p.type==='powershell-admin'?'admin-pane':''} ${focused===p.id?'focused':''} ${maximized===p.id?'maximized':''}`} onPointerDown={()=>{if(focused!==p.id)setFocused(p.id);}}>
             <header className="pane-header"><div className="pane-drag-handle" title={workspace.locked?'Layout locked':'Drag to arrange'}><GripVertical size={12}/><PaneIcon type={p.type} size={14}/><strong title={p.title}>{p.title}</strong></div><span className={`pane-status ${getStatus(p.id)}`} title={statuses[p.id]?.message}><span className={`status-dot ${getStatus(p.id)}`}/>{p.type==='powershell-admin'&&getStatus(p.id)==='running'?'Admin':getStatus(p.id)==='idle'?'Ready':getStatus(p.id)}</span><div className="pane-actions"><button aria-label={`Configure ${p.title}`} title="Configure and rename" onClick={()=>setEditor(p)}><Settings2 size={13}/></button><button aria-label={`Duplicate ${p.title}`} title="Duplicate configuration" onClick={()=>copyPane(p)}><Copy size={12}/></button><button aria-label={maximized===p.id?`Restore ${p.title}`:`Maximize ${p.title}`} title="Focus pane" onClick={()=>{setMaximized(maximized===p.id?'':p.id);setFocused(p.id);}}>{maximized===p.id?<Minimize2 size={13}/>:<Maximize2 size={13}/>}</button><button aria-label={`Close ${p.title}`} title="Close pane" onClick={()=>void closePane(p)}><X size={13}/></button></div></header>
             <button className="pane-directory" title={`${p.cwd}\nClick to change folder`} aria-label={`Change folder for ${p.title}`} onClick={()=>void changeFolder(p)}><FolderOpen size={11}/><span>{p.cwd}</span>{p.type==='powershell-admin'&&<span className="admin-label">UAC session</span>}</button>
-            {p.type==='local-model'?<LocalPane pane={p} profiles={state.profiles} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))}/>:<TerminalPane pane={p} status={getStatus(p.id)} focused={focused===p.id} message={statuses[p.id]?.message} onError={report}/>}
+            {p.type==='local-model'?<LocalPane pane={p} profiles={state.profiles} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))}/>:<TerminalPane pane={p} status={getStatus(p.id)} focused={focused===p.id} message={statuses[p.id]?.message} relaunch={relaunch[p.id]||0} onError={report}/>}
           </div>)}
         </GridLayout>
       </div>
