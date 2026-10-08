@@ -401,6 +401,16 @@ Open the profile and press Discover to confirm the connection.
 **The error log repeats the same message once per pane.** That is expected: every pane with
 auto-start on tries independently at load, so a bad shared setting shows up once each.
 
+**A Claude pane exits the moment you press Enter.** On the first run in a folder, Claude Code
+shows a "Do you trust the files in this folder?" prompt with **"No, exit" highlighted by
+default**. Pressing Enter accepts that and the session ends with exit code 1. Press the Up or
+Down arrow to highlight "Yes, I trust this folder", then Enter. Claude remembers the answer,
+so the prompt does not come back for that folder.
+
+**A Codex pane fails with "Cannot create process, error code: 193".** Fixed in this version:
+the resolver now ignores the extensionless Unix shim npm installs next to `codex.cmd`. If you
+see it on an older build, set the Executable override to the full path of `codex.cmd`.
+
 **A pane says "exited" immediately after Start.** The program ran and quit. Hover the status
 label for the exit code and look at the terminal for the program's own message.
 

@@ -43,7 +43,7 @@ export default function TerminalPane({pane,status,focused,message,onError}: {pan
     {(status==='idle'||status==='exited'||status==='error')&&!launching&&<div className="terminal-empty">
       {pane.type==='powershell-admin'?<Shield size={22}/>:<Play size={22}/>}
       <strong>{pane.type==='powershell-admin'?'Start an elevated session':status==='error'?'Session needs attention':status==='exited'?'Session ended':'Ready to start'}</strong>
-      <span>{pane.type==='powershell-admin'?'Windows will ask for permission. Only this pane elevates.':message||`${pane.type==='custom'?pane.command||'Configure an executable':pane.type} in its own working directory`}</span>
+      <span>{pane.type==='powershell-admin'?'Windows will ask for permission. Only this pane elevates.':pane.type==='claude'&&status==='exited'?'Claude Code closed. If you saw its folder-trust prompt, use the arrow keys to select "Yes, I trust this folder" before pressing Enter; the highlighted default is "No, exit".':message||`${pane.type==='custom'?pane.command||'Configure an executable':pane.type} in its own working directory`}</span>
       <button onClick={()=>void start()}><Play size={13}/>{pane.type==='powershell-admin'?'Start with UAC':'Start session'}</button>
     </div>}
     {launching&&pane.type==='powershell-admin'&&<div className="terminal-empty"><Shield size={22}/><strong>Waiting for Windows permission</strong><span>Approve or cancel the UAC prompt.</span><button onClick={()=>void window.bridge.stopSession(pane.id)}>Cancel launch</button></div>}

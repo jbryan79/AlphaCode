@@ -14,7 +14,7 @@ export function resolveExecutable(pane:PaneConfig):string {
   if(!requested)throw new Error('Configure an executable path before starting this pane.');
   if(pane.type==='claude'&&!pane.command.trim()){const installed=join(process.env.USERPROFILE||'', '.local','bin','claude.exe');if(existsSync(installed))return installed;}
   if(win32.isAbsolute(requested)){if(!existsSync(requested))throw new Error(`Executable was not found: ${requested}`);return requested;}
-  try {return execFileSync('where.exe',[requested],{encoding:'utf8',windowsHide:true,timeout:5000}).split(/\r?\n/).find(path=>path.trim()&&existsSync(path.trim()))?.trim()||missing(requested);}catch{throw new Error(`Cannot find ${requested}. Install the CLI, add it to PATH, or set its full executable path in pane configuration.`);}
+  try {return execFileSync('where.exe',[requested],{encoding:'utf8',windowsHide:true,timeout:5000}).split(/\r?\n/).map(path=>path.trim()).find(path=>path&&/[.](exe|cmd|bat|com)$/i.test(path)&&existsSync(path))?.trim()||missing(requested);}catch{throw new Error(`Cannot find ${requested}. Install the CLI, add it to PATH, or set its full executable path in pane configuration.`);}
 }
 const missing=(command:string):never=>{throw new Error(`Cannot find executable: ${command}`);};
 export function executableLaunch(file:string,args:string[]):{file:string;args:string[]}{
