@@ -51,8 +51,8 @@ Admin PowerShell pane elevates, and only when you ask it to.
 ## Install and run
 
 ```powershell
-git clone <this repo> AlphaBetaCode
-cd AlphaBetaCode
+git clone https://github.com/jbryan79/AlphaCode.git
+cd AlphaCode
 npm install
 npm run build
 npm start
