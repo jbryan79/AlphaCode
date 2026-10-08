@@ -190,7 +190,8 @@ saved. Hover for the full path.
 From left to right in the header:
 
 - **Grip and title.** Drag the grip to move the pane on the grid (unless locked). The icon
-  shows the pane type: terminal, shield for Admin, chip for local model.
+  shows the pane type: terminal, shield for Admin, chip for local model. If the pane has an
+  accent color, the header, border, and directory strip are tinted with it.
 - **Status label** with a colored dot. See [Session status labels](#session-status-labels).
   Hover it to read the last status message, which is where error details appear.
 - **Configure** (sliders). Opens the Configure pane dialog.
@@ -219,6 +220,12 @@ terminal with a **Start session** button. Panes with auto-start on skip this at 
 
 **Pane type.** See [Pane types](#pane-types). Changing the type switches auto-start off, so
 you make a deliberate choice about the new command.
+
+**Accent color.** None, Blue, Green, Amber, Purple, Red, or Teal. The chosen color tints the
+pane's border, header bar, and directory strip, and marks the pane in the sidebar list, so
+related panes stand apart at a glance. For example, give every pane that works in one project
+the same color. The color is saved with the workspace and travels with exports. It is purely
+visual and has no effect on the session. Duplicating a pane keeps its color.
 
 **Working directory.** Where the process starts. Must exist. Use the folder button to browse.
 
@@ -257,6 +264,12 @@ the Start state. Name and auto-start changes apply without interrupting anything
 | **CMD** | `%ComSpec%` (cmd.exe) | Classic command prompt. |
 | **Git Bash** | `C:\Program Files\Git\bin\bash.exe` | Set an override if Git is installed elsewhere. |
 | **Custom Command** | none, required | Any executable or `.cmd`/`.bat` script. Never auto-starts by default. |
+
+**First run of a Claude pane in a new folder.** Claude Code asks "Do you trust the files in
+this folder?" and highlights **"No, exit"** by default. Pressing Enter straight away accepts
+that and the session ends. Press the Up or Down arrow to highlight "Yes, I trust this
+folder", then Enter. Claude remembers the answer for that folder, so you only do this once.
+If you did hit Enter too soon, press Restart in the pane footer and answer again.
 
 npm-style `.cmd` and `.bat` shims (how many Node CLIs are installed on Windows) are launched
 through PowerShell with each argument quoted literally, so arguments are never interpreted

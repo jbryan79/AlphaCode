@@ -8,7 +8,7 @@ import { StateStore, decodeHelperConfig, makeElevationLaunch, ProtocolDecoder, v
 import { ProviderClient } from '../electron/providers';
 import { TerminalManager, executableLaunch } from '../electron/terminals';
 
-const pane = { id:'p1',type:'powershell' as const,title:'PowerShell',cwd:'D:\\Dev',command:'',args:[],profileId:'',autoStart:true };
+const pane = { id:'p1',type:'powershell' as const,title:'PowerShell',cwd:'D:\\Dev',command:'',args:[],profileId:'',color:'' as const,autoStart:true };
 const workspace = { id:'w1',name:'Main',root:'D:\\Dev',panes:[pane],layout:[{i:'p1',x:0,y:0,w:6,h:3,minW:3,minH:3}],locked:false };
 const state = { version:1 as const,activeWorkspaceId:'w1',workspaces:[workspace],profiles:[] };
 const profile = { id:'local',name:'Local',provider:'ollama' as const,endpoint:'http://127.0.0.1:11434',model:'test',systemPrompt:'Be helpful',contextSize:4096,temperature:0.4 };

@@ -1,14 +1,18 @@
-import type { AppState, GridItem, LocalProfile, PaneConfig, PaneType, Workspace } from './types';
+import type { AppState, GridItem, LocalProfile, PaneColor, PaneConfig, PaneType, Workspace } from './types';
 
 export const PANE_TYPES: { type: PaneType; label: string }[] = [
   {type:'claude',label:'Claude'}, {type:'powershell',label:'PowerShell'}, {type:'powershell-admin',label:'PowerShell Admin'},
   {type:'local-model',label:'Local Model'}, {type:'codex',label:'Codex'}, {type:'gemini',label:'Gemini'},
   {type:'wsl',label:'WSL'}, {type:'cmd',label:'CMD'}, {type:'git-bash',label:'Git Bash'}, {type:'custom',label:'Custom Command'},
 ];
+export const PANE_COLORS: { color: PaneColor; label: string }[] = [
+  {color:'',label:'None'}, {color:'blue',label:'Blue'}, {color:'green',label:'Green'}, {color:'amber',label:'Amber'},
+  {color:'purple',label:'Purple'}, {color:'red',label:'Red'}, {color:'teal',label:'Teal'},
+];
 export const id = () => globalThis.crypto.randomUUID();
 export const balancedLayout = (panes: PaneConfig[]): GridItem[] => panes.map((p,n) => ({ i:p.id, x:(n%2)*6, y:Math.floor(n/2)*4, w:6, h:4, minW:3, minH:3 }));
 export function createPane(type: PaneType, cwd: string, profileId = ''): PaneConfig {
-  return { id:id(), type, title:PANE_TYPES.find(t=>t.type===type)?.label || 'Terminal', cwd, command:'', args:[], profileId, autoStart:type!=='powershell-admin' && type!=='local-model' && type!=='custom' };
+  return { id:id(), type, title:PANE_TYPES.find(t=>t.type===type)?.label || 'Terminal', cwd, command:'', args:[], profileId, color:'', autoStart:type!=='powershell-admin' && type!=='local-model' && type!=='custom' };
 }
 export function defaultState(root: string): AppState {
   const profiles: LocalProfile[] = [
@@ -63,7 +67,8 @@ export function validateProfile(value: unknown): LocalProfile {
 export function validatePane(value: unknown): PaneConfig {
   const p=value as PaneConfig; if(!p||!PANE_TYPES.some(t=>t.type===p.type)||typeof p.autoStart!=='boolean')throw new Error('Invalid pane');
   if(!Array.isArray(p.args)||p.args.length>100)throw new Error('Invalid command arguments');
-  return {id:validateId(p.id),type:p.type,title:string(p.title,'pane title',100),cwd:string(p.cwd,'working directory'),command:string(p.command,'command'),args:p.args.map(a=>string(a,'argument')),profileId:string(p.profileId,'profile ID',100),autoStart:p.type==='powershell-admin'?false:p.autoStart};
+  const color=p.color||''; if(!PANE_COLORS.some(c=>c.color===color))throw new Error('Invalid pane color');
+  return {id:validateId(p.id),type:p.type,title:string(p.title,'pane title',100),cwd:string(p.cwd,'working directory'),command:string(p.command,'command'),args:p.args.map(a=>string(a,'argument')),profileId:string(p.profileId,'profile ID',100),color,autoStart:p.type==='powershell-admin'?false:p.autoStart};
 }
 export function validateWorkspace(value: unknown): Workspace {
   const w=value as Workspace; if(!w||!Array.isArray(w.panes)||w.panes.length>32||!Array.isArray(w.layout)||typeof w.locked!=='boolean')throw new Error('Invalid workspace');

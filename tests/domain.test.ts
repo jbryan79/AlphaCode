@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { defaultState, createPane, duplicatePane, moveWorkspace, reorderPane, swapPane, applyPreset, removePane, validateState, validateWorkspace } from '../shared/domain';
+import { defaultState, createPane, duplicatePane, moveWorkspace, reorderPane, swapPane, applyPreset, removePane, validatePane, validateState, validateWorkspace } from '../shared/domain';
 
 describe('workspace behavior', () => {
+  it('accent color is optional, normalized, and restricted to the palette', () => {
+    const legacy={...createPane('powershell','C:\\x')} as any; delete legacy.color;
+    expect(validatePane(legacy).color).toBe('');
+    expect(validatePane({...createPane('claude','C:\\x'),color:'blue'}).color).toBe('blue');
+    expect(()=>validatePane({...createPane('claude','C:\\x'),color:'#ff0000'})).toThrow('Invalid pane color');
+  });
   it('moving the root rewrites pane directories under it and leaves others alone', () => {
     const w=defaultState('D:\\Dev\\old').workspaces[0]; w.panes[4].cwd='D:\\Dev\\older'; w.panes[5].cwd='E:\\other';
     const m=moveWorkspace(w,'C:\\new');

@@ -1,7 +1,8 @@
 export type PaneType = 'claude' | 'powershell' | 'powershell-admin' | 'local-model' | 'codex' | 'gemini' | 'wsl' | 'cmd' | 'git-bash' | 'custom';
+export type PaneColor = '' | 'blue' | 'green' | 'amber' | 'purple' | 'red' | 'teal';
 export type SessionStatus = 'idle' | 'starting' | 'running' | 'busy' | 'exited' | 'error';
 export interface LocalProfile { id: string; name: string; provider: 'ollama' | 'lmstudio'; endpoint: string; model: string; systemPrompt: string; contextSize: number; temperature: number; }
-export interface PaneConfig { id: string; type: PaneType; title: string; cwd: string; command: string; args: string[]; profileId: string; autoStart: boolean; }
+export interface PaneConfig { id: string; type: PaneType; title: string; cwd: string; command: string; args: string[]; profileId: string; autoStart: boolean; color?: PaneColor; }
 export interface GridItem { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number; }
 export interface Workspace { id: string; name: string; root: string; panes: PaneConfig[]; layout: GridItem[]; locked: boolean; }
 export interface AppState { version: 1; activeWorkspaceId: string; workspaces: Workspace[]; profiles: LocalProfile[]; }
