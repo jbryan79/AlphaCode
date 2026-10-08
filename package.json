@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "smoke": "npm run build:main && electron dist-electron/electron/smoke.js",
-    "package": "npm run build && electron-packager . AlphaCode --platform=win32 --arch=x64 --out=release --overwrite --asar --asar.unpackDir=node_modules/node-pty --ignore=\"^/(work|workspaces|docs|tests|test-results|playwright-report|src|shared|electron|scripts|release)(/|$)\""
+    "package": "npm run build && electron-packager . AlphaCode --platform=win32 --arch=x64 --out=release --overwrite --icon=public/icon.ico --asar --asar.unpackDir=node_modules/node-pty --ignore=\"^/(work|workspaces|docs|tests|test-results|playwright-report|src|shared|electron|scripts|release)(/|$)\""
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
