@@ -7,3 +7,7 @@ playwright-report/
 work/
 .superpowers/
 *.log
+/target
+/ui/dist
+/crates/app/gen
+*.tmp
