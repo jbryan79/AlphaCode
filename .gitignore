@@ -11,3 +11,4 @@ work/
 /ui/dist
 /crates/app/gen
 *.tmp
+.claude/data/
