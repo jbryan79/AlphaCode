@@ -1,6 +1,8 @@
 {
   "name": "alphacode",
   "version": "0.1.0",
+  "license": "MIT",
+  "author": "James Bryan (JABSystems)",
   "private": true,
   "description": "AlphaCode by JABSystems - a local Windows terminal cockpit",
   "main": "dist-electron/electron/main.js",

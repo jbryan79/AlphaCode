@@ -26,7 +26,7 @@ test('production dashboard, real terminals, layout editing and persistence',asyn
   await ps.locator('.xterm-helper-textarea').focus();
   await page.keyboard.type("Write-Output ('ALPHACODE_' + 'PTY_OK'); (Get-Location).Path");await page.keyboard.press('Enter');
   await expect.poll(()=>page.evaluate(()=>(window as any).testEvents.filter((e:any)=>e.kind==='data').map((e:any)=>e.data).join(''))).toContain('ALPHACODE_PTY_OK');
-  await expect.poll(()=>page.evaluate(()=>(window as any).testEvents.filter((e:any)=>e.kind==='data').map((e:any)=>e.data).join(''))).toContain(join(process.env.USERPROFILE||'','Dev','AlphaBeta'));
+  await expect.poll(()=>page.evaluate(()=>(window as any).testEvents.filter((e:any)=>e.kind==='data').map((e:any)=>e.data).join(''))).toContain(process.env.USERPROFILE||'');
   const claudeDirs=await page.locator('.pane').filter({has:page.locator('.pane-header strong', {hasText:/^Claude [A-D]$/})}).locator('.pane-directory>span:first-of-type').allTextContents();
   expect(new Set(claudeDirs).size).toBe(4);
   const psId=await ps.getAttribute('data-pane-id');

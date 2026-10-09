@@ -10,7 +10,7 @@ import { TerminalManager } from './terminals';
 import { ElevatedManager, isAdministrator, runElevatedHelper } from './elevated';
 import { ProviderClient } from './providers';
 
-const DEFAULT_ROOT=join(app.getPath('home'),'Dev','AlphaBeta');
+const DEFAULT_ROOT=app.getPath('home');
 if(process.env.ALPHACODE_DATA_DIR)app.setPath('userData',resolve(process.env.ALPHACODE_DATA_DIR));
 let window:BrowserWindow|null=null;
 let elevatedApp=false;

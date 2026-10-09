@@ -77,7 +77,7 @@ Other scripts:
 ## First launch
 
 The first time AlphaCode runs with no saved state it creates a workspace called
-**Development** rooted at `%USERPROFILE%\Dev\AlphaBeta` with eight panes:
+**Development** rooted at your home folder (`%USERPROFILE%`) with eight panes:
 
 | Pane | Type | Working directory | Starts automatically |
 |---|---|---|---|
