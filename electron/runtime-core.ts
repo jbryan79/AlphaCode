@@ -13,6 +13,8 @@ export function validateMessages(value: unknown): ChatMessage[] {
   if(!Array.isArray(value)||value.length<1||value.length>1000)fail('Chat requires 1–1000 messages.');
   let size=0;return (value as unknown[]).map(v=>{const m=object(v);if(!['system','user','assistant'].includes(m.role))fail('Invalid chat role.');const content=str(m.content,'message',1048576);size+=content.length;if(size>2*1024*1024)fail('Conversation is too large.');return {role:m.role,content};});
 }
+/** Windows refuses to replace a file another handle has open (EPERM); readers such as editors, backups or the e2e poll are brief, so retry. */
+const replace=async(from:string,to:string)=>{for(let i=0;;i++){try{return await rename(from,to);}catch(error){const code=(error as NodeJS.ErrnoException).code;if(i>=5||!["EPERM","EBUSY","EACCES"].includes(code||""))throw error;await new Promise(r=>setTimeout(r,25*(i+1)));}}};
 export class StateStore {
   private writes:Promise<void>=Promise.resolve();
   private recoveryRequired=false;
@@ -27,8 +29,10 @@ export class StateStore {
   save(value:unknown):Promise<void>{
     if(this.recoveryRequired)return Promise.reject(new Error('State recovery is required. Automatic saves are blocked to preserve the original invalid files. Move them aside and restart AlphaCode before saving.'));
     let state:AppState;try{state=validateState(value);}catch(error){return Promise.reject(error);}
-    const next=this.writes.catch(()=>{}).then(async()=>{await mkdir(dirname(this.path),{recursive:true});const temporary=this.path+'.tmp';await writeFile(temporary,JSON.stringify(state,null,2),'utf8');try{validateState(JSON.parse(await readFile(this.path,'utf8')));await copyFile(this.path,this.path+'.bak');}catch{}await rename(temporary,this.path);});this.writes=next;return next;
+    const next=this.writes.catch(()=>{}).then(async()=>{await mkdir(dirname(this.path),{recursive:true});const temporary=this.path+'.tmp';await writeFile(temporary,JSON.stringify(state,null,2),'utf8');try{validateState(JSON.parse(await readFile(this.path,'utf8')));await copyFile(this.path,this.path+'.bak');}catch{}await replace(temporary,this.path);});this.writes=next;return next;
   }
+  /** Resolves once every save accepted so far has reached disk; quitting waits on this. */
+  flush():Promise<void>{return this.writes.catch(()=>{});}
 }
 export function assertNormalToken(elevated:boolean):void {if(elevated)fail('AlphaCode must run without Administrator privileges. Close it and start it normally; elevate only the Admin PowerShell pane.');}
 export interface HelperConfig {paneId:string;cwd:string;cols:number;rows:number;pipe:string;nonce:string;shell:'powershell'}

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type IpcMainEvent } from 'electron';
 import { join, resolve } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node-pty';
 import type { PaneConfig, SessionEvent } from '../shared/types';
 import { validateId, validatePane, validateWorkspace } from '../shared/domain';
@@ -42,11 +43,25 @@ function registerIpc():void{
   handle('bridge:cancel-chat',(id:string)=>providers.cancel(id));
 }
 
+const windowPath=join(app.getPath('userData'),'window.json');
+/** Last window geometry, or {} on first launch or an unreadable file. Only finite integers are accepted. */
+function lastWindow():{x?:number;y?:number;width?:number;height?:number;maximized?:boolean}{
+  try{const w=JSON.parse(readFileSync(windowPath,'utf8'));const int=(v:unknown)=>Number.isInteger(v)?v as number:undefined;return {x:int(w.x),y:int(w.y),width:int(w.width),height:int(w.height),maximized:w.maximized===true};}catch{return {};}
+}
 async function createWindow():Promise<void>{
+  const last=lastWindow(); // ponytail: no display-bounds check; Electron clamps partially off-screen windows, a removed monitor may need a drag back.
   window=new BrowserWindow({width:1560,height:1050,minWidth:960,minHeight:640,title:'AlphaCode by JABSystems',icon:join(app.getAppPath(),'public','icon.ico'),backgroundColor:'#131619',show:false,webPreferences:{preload:join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
+  // Electron applies a rectangle a pixel or two off at fractional display scaling (electron/electron#10862), and a hidden window is
+  // worse than a shown one. Restore while hidden, correct once shown, and on close let an unchanged window keep the numbers it was
+  // restored from, so the error never compounds across launches.
+  const rect=last.width&&last.height?{x:last.x??0,y:last.y??0,width:last.width,height:last.height}:null;
+  let restored='';
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',event=>event.preventDefault());
-  window.once('ready-to-show',()=>window?.show());
+  window.once('ready-to-show',()=>{if(!window)return;if(rect)window.setContentBounds(rect);window.show();if(rect)window.setContentBounds(rect);if(last.maximized)window.maximize();restored=JSON.stringify(window.getContentBounds());});
+  window.on('close',()=>{try{const maximized=window!.isMaximized(),current=maximized?window!.getNormalBounds():window!.getContentBounds();
+    // ponytail: a maximized window keeps the rectangle it was restored from; a resize made before maximizing in the same session is not kept.
+    const unchanged=maximized||JSON.stringify(current)===restored;writeFileSync(windowPath,JSON.stringify({...(unchanged&&last.width?last:current),maximized}));}catch{/* Geometry is a convenience; never block closing on it. */}});
   window.on('closed',()=>{window=null;});
   if(dev)await window.loadURL('http://127.0.0.1:5173');else await window.loadFile(join(__dirname,'../../dist/index.html'));
 }
@@ -59,5 +74,5 @@ if(helperIndex>=0){
   app.whenReady().then(async()=>{elevatedApp=isAdministrator();assertNormalToken(elevatedApp);for(const suffix of ['a','b','c','d'])await mkdir(join(DEFAULT_ROOT,'workspaces',`claude-${suffix}`),{recursive:true});registerIpc();await createWindow();}).catch(error=>{dialog.showErrorBox('AlphaCode cannot start',(error as Error).message);app.exit(1);});
   app.on('window-all-closed',()=>app.quit());
   let quitting=false;
-  app.on('before-quit',event=>{if(quitting)return;quitting=true;event.preventDefault();admins.stopAll();providers.cancelAll();terminals.stopAll().finally(()=>app.quit());});
+  app.on('before-quit',event=>{if(quitting)return;quitting=true;event.preventDefault();admins.stopAll();providers.cancelAll();Promise.all([terminals.stopAll(),stateStore.flush()]).finally(()=>app.quit());});
 }

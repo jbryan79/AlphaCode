@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultState, createPane, duplicatePane, moveWorkspace, reorderPane, swapPane, applyPreset, removePane, validatePane, validateState, validateWorkspace } from '../shared/domain';
+import { addPane, defaultState, createPane, dropTarget, duplicatePane, moveWorkspace, reorderPane, swapPane, applyPreset, removePane, validatePane, validateState, validateWorkspace } from '../shared/domain';
 
 describe('workspace behavior', () => {
   it('accent color is optional, normalized, and restricted to the palette', () => {
@@ -22,6 +22,12 @@ describe('workspace behavior', () => {
     expect(w.panes[5].autoStart).toBe(false);
     expect(new Set(w.panes.map(p => p.id)).size).toBe(8);
   });
+  it('a dropped pane targets the origin pane it overlaps most, or nothing on empty space', () => {
+    const w = defaultState('D:\\Dev\\x').workspaces[0], [a,,c,d] = w.layout;
+    expect(dropTarget(w.layout,{...a,x:1,y:4})?.i).toBe(c.i);
+    expect(dropTarget(w.layout,{...a,x:5,y:5})?.i).toBe(d.i);
+    expect(dropTarget(w.layout,{...a,y:40})).toBeUndefined();
+  });
   it('reorders without changing session identities or configuration', () => {
     const w = defaultState('D:\\Dev\\clauDashole').workspaces[0]; const moved = reorderPane(w, w.panes[0].id, w.panes[3].id);
     expect(moved.panes[3]).toEqual(w.panes[0]); expect(moved.layout.map(x => x.i)).toEqual(moved.panes.map(p => p.id));
@@ -43,10 +49,19 @@ describe('workspace behavior', () => {
     const w=defaultState('D:\\Dev\\clauDashole').workspaces[0]; const four=applyPreset(w,4); const six=applyPreset(four,6);
     expect(four.panes).toHaveLength(4); expect(six.panes).toHaveLength(6);
     expect(six.panes.slice(0,4)).toEqual(w.panes.slice(0,4));
+    const one=applyPreset(w,1); expect(one.panes).toEqual([w.panes[0]]); expect(one.layout).toEqual([{i:w.panes[0].id,x:0,y:0,w:12,h:4,minW:3,minH:3}]);
+    expect(validateWorkspace(one).layout[0].w).toBe(12);
   });
   it('can close all panes and add another later', () => {
     let w=defaultState('D:\\Dev\\clauDashole').workspaces[0]; for(const p of w.panes) w=removePane(w,p.id);
     expect(w.panes).toHaveLength(0); expect(createPane('cmd',w.root).type).toBe('cmd');
+  });
+  it('a lone pane fills the grid whether it got there by closing others or by being added to an empty workspace', () => {
+    let w=defaultState('D:\\Dev\\clauDashole').workspaces[0]; for(const p of w.panes.slice(1)) w=removePane(w,p.id);
+    expect(w.layout).toEqual([{i:w.panes[0].id,x:0,y:0,w:12,h:4,minW:3,minH:3}]);
+    const fresh=addPane(removePane(w,w.panes[0].id),createPane('cmd',w.root));
+    expect(fresh.layout[0]).toMatchObject({x:0,y:0,w:12});
+    const two=addPane(fresh,createPane('cmd',w.root)); expect(two.layout[1]).toMatchObject({w:6});
   });
   it('rejects invalid or duplicate IDs and foreign layout references', () => {
     const w=defaultState('D:\\Dev\\clauDashole').workspaces[0];

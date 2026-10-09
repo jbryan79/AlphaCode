@@ -10,7 +10,7 @@ export const PANE_COLORS: { color: PaneColor; label: string }[] = [
   {color:'purple',label:'Purple'}, {color:'red',label:'Red'}, {color:'teal',label:'Teal'},
 ];
 export const id = () => globalThis.crypto.randomUUID();
-export const balancedLayout = (panes: PaneConfig[]): GridItem[] => panes.map((p,n) => ({ i:p.id, x:(n%2)*6, y:Math.floor(n/2)*4, w:6, h:4, minW:3, minH:3 }));
+export const balancedLayout = (panes: PaneConfig[]): GridItem[] => panes.length===1?[{ i:panes[0].id, x:0, y:0, w:12, h:4, minW:3, minH:3 }]:panes.map((p,n) => ({ i:p.id, x:(n%2)*6, y:Math.floor(n/2)*4, w:6, h:4, minW:3, minH:3 }));
 export function createPane(type: PaneType, cwd: string, profileId = ''): PaneConfig {
   return { id:id(), type, title:PANE_TYPES.find(t=>t.type===type)?.label || 'Terminal', cwd, command:'', args:[], profileId, color:'', autoStart:type!=='powershell-admin' && type!=='local-model' && type!=='custom' };
 }
@@ -27,15 +27,17 @@ export function moveWorkspace(w: Workspace, root: string): Workspace {
   const under=(cwd:string)=>cwd===w.root||cwd.startsWith(w.root+'\\');
   return {...w,root,panes:w.panes.map(p=>under(p.cwd)?{...p,cwd:root+p.cwd.slice(w.root.length)}:p)};
 }
+/** A lone pane owns the whole grid; any other count keeps its layout. */
+export const fillSinglePane = (w: Workspace): Workspace => w.panes.length===1?{...w,layout:balancedLayout(w.panes)}:w;
 export function addPane(w: Workspace, p: PaneConfig): Workspace {
   const y=Math.max(0,...w.layout.map(l=>l.y+l.h));
-  return {...w,panes:[...w.panes,p],layout:[...w.layout,{i:p.id,x:0,y,w:6,h:4,minW:3,minH:3}]};
+  return fillSinglePane({...w,panes:[...w.panes,p],layout:[...w.layout,{i:p.id,x:0,y,w:6,h:4,minW:3,minH:3}]});
 }
 export function duplicatePane(w: Workspace, paneId: string): Workspace {
   const pane=w.panes.find(p=>p.id===paneId); if(!pane) return w;
   return addPane(w,{...pane,id:id(),title:`${pane.title} copy`,args:[...pane.args],autoStart:false});
 }
-export function removePane(w: Workspace, paneId: string): Workspace { return {...w,panes:w.panes.filter(p=>p.id!==paneId),layout:w.layout.filter(l=>l.i!==paneId)}; }
+export function removePane(w: Workspace, paneId: string): Workspace { return fillSinglePane({...w,panes:w.panes.filter(p=>p.id!==paneId),layout:w.layout.filter(l=>l.i!==paneId)}); }
 export function reorderPane(w: Workspace, from: string, to: string): Workspace {
   const panes=[...w.panes]; const a=panes.findIndex(p=>p.id===from),b=panes.findIndex(p=>p.id===to);
   if(a<0||b<0||a===b)return w;
@@ -46,7 +48,13 @@ export function swapPane(w: Workspace, a: string, b: string): Workspace {
   const panes=[...w.panes],ai=panes.findIndex(p=>p.id===a),bi=panes.findIndex(p=>p.id===b); [panes[ai],panes[bi]]=[panes[bi],panes[ai]];
   return {...w,panes,layout:w.layout.map(l=>l.i===a?{...second,i:a}:l.i===b?{...first,i:b}:l)};
 }
-export function applyPreset(w: Workspace, count: 4|6|8): Workspace {
+/** The origin item the dropped item overlaps most, or undefined when it was dropped on empty space. */
+export function dropTarget(origin: GridItem[], dropped: GridItem): GridItem | undefined {
+  const overlap=(l:GridItem)=>Math.max(0,Math.min(dropped.x+dropped.w,l.x+l.w)-Math.max(dropped.x,l.x))*Math.max(0,Math.min(dropped.y+dropped.h,l.y+l.h)-Math.max(dropped.y,l.y));
+  return origin.filter(l=>l.i!==dropped.i&&overlap(l)>0).sort((a,b)=>overlap(b)-overlap(a))[0];
+}
+export const PRESETS = [1,4,6,8] as const;
+export function applyPreset(w: Workspace, count: typeof PRESETS[number]): Workspace {
   const panes=w.panes.slice(0,count); while(panes.length<count)panes.push(createPane('powershell',w.root));
   return {...w,panes,layout:balancedLayout(panes)};
 }

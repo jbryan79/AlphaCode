@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -60,6 +60,12 @@ describe('runtime trust boundaries', () => {
     await writeFile(path,'corrupt');
     expect((await store.load())?.workspaces[0].name).toBe('Main');
     await expect(store.save({...state,version:2} as any)).rejects.toThrow();
+  });
+  it('saves while another process holds the state file open for reading',async()=>{
+    const path=join(await mkdtemp(join(tmpdir(),'alphacode-busy-')),'state.json');const store=new StateStore(path);await store.save(state);
+    const handle=await open(path,'r');setTimeout(()=>handle.close(),60);
+    await store.save({...state,workspaces:[{...workspace,name:'Busy'}]});
+    expect(JSON.parse(await readFile(path,'utf8')).workspaces[0].name).toBe('Busy');
   });
   it('saves and reloads an intentionally empty workspace',async()=>{
     const path=join(await mkdtemp(join(tmpdir(),'alphacode-empty-')),'state.json');const store=new StateStore(path);

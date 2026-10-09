@@ -20,6 +20,7 @@ user profile.
    - [Toolbar](#toolbar)
    - [Sidebar: Workspace](#sidebar-workspace)
    - [Sidebar: Panes](#sidebar-panes)
+   - [Grid bar](#grid-bar)
    - [Sidebar: Local model profiles](#sidebar-local-model-profiles)
    - [Pane header and footer](#pane-header-and-footer)
    - [Configure pane dialog](#configure-pane-dialog)
@@ -104,8 +105,10 @@ the middle, and a status bar along the bottom.
 
 **Sidebar toggle** (panel icon). Hides or shows the left sidebar. The grid takes the space.
 
-**4 / 6 / 8 panes.** Layout presets. Each one keeps the first N panes in sidebar order and
-resets the grid to an even two-column arrangement.
+**1 / 4 / 6 / 8 panes.** Layout presets. Each one keeps the first N panes in sidebar order and
+resets the grid to an even two-column arrangement. **1 pane** is the single-session layout: the
+first pane fills the whole grid. A workspace that ends up with one pane by any route (closing
+the others, or adding one to an empty workspace) also fills the grid and cannot be resized.
 
 - If the workspace has more than N panes, the extra panes are **closed and their sessions
   ended**. You are asked to confirm first.
@@ -113,9 +116,9 @@ resets the grid to an even two-column arrangement.
 - The preset buttons only highlight when the pane count matches exactly. Any pane count from
   0 to 32 is allowed; presets are a convenience, not a rule.
 
-**Lock / Unlock layout** (padlock). When locked, panes cannot be dragged, resized, or
-reordered. Terminals keep working normally. Use it once you like the arrangement and want to
-stop accidental drags. The status bar shows "Layout locked" or "Layout editable".
+**Layout editable / Layout locked** (padlock with label). Click to toggle. When locked, panes
+cannot be dragged, resized, or reordered. Terminals keep working normally. Use it once you
+like the arrangement and want to stop accidental drags. The status bar repeats the state.
 
 **Add pane.** Opens a menu of pane types (see [Pane types](#pane-types)). Choosing one adds a
 pane at the bottom of the grid, using the workspace root as its directory, and opens the
@@ -161,9 +164,15 @@ colored dot is the session status. Click a name to focus that pane and scroll it
 If a pane is maximized, clicking another name switches the maximized view to that pane.
 
 **Drag a list item**, or use the **up / down arrows**, to reorder. What happens depends on
-the Drag behavior setting below.
+the Drag setting in the grid bar.
 
-**Drag behavior.** Controls what dragging does, both in this list and on the grid.
+### Grid bar
+
+The row above the grid shows the layout hint, the **Drag** setting, and **Balance panes** when
+there are two or more panes and the layout is unlocked. On the right it counts active and
+total panes and offers **Close all**, which ends every session after a confirmation.
+
+**Drag.** Controls what dragging does, both in the sidebar list and on the grid.
 
 - **Reflow** (default). The dragged pane is inserted at the new position and the others shift
   to make room. The sidebar order follows the grid order. Reordering from the sidebar in this
@@ -175,15 +184,16 @@ the Drag behavior setting below.
 Neither mode restarts a session. Pane identity is the session; moving a pane never touches
 its process or transcript.
 
-**Balance panes.** Resets every pane to the same size in two columns. Disabled while locked.
+**Balance panes.** Resets every pane to the same size in two columns. Hidden while locked or
+when only one pane exists.
 
 ### Sidebar: Local model profiles
 
 Reusable connection settings for Ollama or LM Studio. Click a profile to edit it, or the plus
 button to add one. See [Local model profile dialog](#local-model-profile-dialog).
 
-**Local workspace storage** at the bottom shows the path of the file where everything is
-saved. Hover for the full path.
+Hover **Saved locally** in the status bar to see the path of the file where everything is
+saved.
 
 ### Pane header and footer
 
@@ -294,7 +304,11 @@ resize, Ctrl+C, and interactive programs all work.
 | **exited** | dark grey | Process ended on its own, or you pressed Stop. Hover for the exit code. |
 | **error** | red | Launch failed. Hover the label, or read the red line in the terminal, for the reason. |
 
-The sub-bar above the grid shows how many panes are active out of the total.
+The sub-bar above the grid shows how many panes are active out of the total, next to
+**Close all**. Close all removes every pane from the workspace and ends every session, after a
+confirmation. The workspace itself stays, empty, and is saved that way, so quitting afterwards
+brings back an empty grid. Use **Add pane**, or the **Add PowerShell** button in the empty
+grid, to start again, or load another workspace from the sidebar.
 
 ### Admin PowerShell and UAC
 
@@ -377,8 +391,12 @@ Everything AlphaCode remembers is in one file:
 It contains all workspaces (panes, directories, commands, layouts) and all local model
 profiles. It does not contain terminal output, chat transcripts, or any secrets.
 
-- Saves happen automatically about half a second after any change. The status bar shows
-  "Saving…" then "Saved locally".
+- Every change is saved the moment it happens, and quitting waits for the last write to
+  finish, so a change made just before closing the window is there on the next launch. The
+  status bar shows "Saving…" then "Saved locally".
+- The app opens where you left it: `window.json` next to `state.json` records the window's
+  position, size, and whether it was maximized. If a monitor was removed since, drag the
+  window back on screen once and the new position is kept.
 - Each save is written to a temporary file and swapped in atomically, and the previous valid
   file is kept as `state.json.bak`.
 - On startup, if `state.json` is unreadable or invalid, the `.bak` file is loaded instead.

@@ -83,6 +83,13 @@ test('local models, optional pane menu, named workspaces and preset counts',asyn
     await expect(page.getByLabel('Load workspace')).toContainText('SQL Day');
     await page.getByRole('button',{name:'4 panes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(4);
     await page.getByRole('button',{name:'6 panes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(6);
+    // A single session fills the grid; Close all empties the workspace and the empty state offers a fresh pane.
+    await page.getByRole('button',{name:'1 pane',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(1);
+    const single=page.locator('.pane'),gridBox=(await page.locator('.react-grid-layout').boundingBox())!,singleBox=(await single.boundingBox())!;
+    expect(singleBox.width).toBeGreaterThan(gridBox.width*0.95);
+    await page.getByRole('button',{name:'Close all',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(0);
+    await expect(page.getByRole('button',{name:'Close all',exact:true})).toHaveCount(0);
+    await expect(page.locator('.empty-workspace')).toBeVisible();await page.getByRole('button',{name:'Add PowerShell',exact:true}).click();await page.getByRole('button',{name:'Apply changes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(1);
     await expect(page.locator('.app-statusbar')).toContainText('Saved locally');
     const state=await page.evaluate(()=>window.bridge.loadState());
     const sqlDay=state!.workspaces.find(w=>w.name==='SQL Day');if(!sqlDay)throw new Error('Named workspace missing');
@@ -90,4 +97,21 @@ test('local models, optional pane menu, named workspaces and preset counts',asyn
     await expect(page.locator('.pane[data-pane-title="PowerShell Admin"] .pane-status')).toHaveText('Ready');
     expect(errors).toEqual([]);
   }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+
+test('a change made just before closing the window survives, and the window geometry comes back',async()=>{
+  // Compare content bounds against what Windows actually applied: display scaling can round the requested size by a pixel.
+  const bounds=await app.evaluate(({BrowserWindow})=>{const w=BrowserWindow.getAllWindows()[0];w.setContentBounds({x:60,y:40,width:1240,height:820});return w.getContentBounds();});
+  const target=page.locator('.pane').first(),title=(await target.getAttribute('data-pane-title'))!;
+  await page.getByRole('button',{name:`Configure ${title}`,exact:true}).click();
+  await page.getByLabel('Pane name',{exact:true}).fill('Last minute');await page.getByRole('button',{name:'Apply changes',exact:true}).click();
+  await expect(page.locator('.pane[data-pane-title="Last minute"]')).toHaveCount(1);
+  // Close the window the way a user does, with no wait for the status bar.
+  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());await app.waitForEvent('close');
+  await launch();
+  await expect(page.locator('.pane[data-pane-title="Last minute"]')).toHaveCount(1);
+  // Electron rounds the size by a pixel or two at fractional display scaling (electron/electron#10862); position is exact.
+  const after=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getContentBounds());
+  expect([after.x,after.y]).toEqual([bounds.x,bounds.y]);expect(Math.abs(after.width-bounds.width)).toBeLessThanOrEqual(3);expect(Math.abs(after.height-bounds.height)).toBeLessThanOrEqual(3);
+  expect(errors).toEqual([]);
 });
