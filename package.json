@@ -14,7 +14,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "smoke": "npm run build:main && electron dist-electron/electron/smoke.js",
-    "package": "npm run build && electron-packager . AlphaCode --platform=win32 --arch=x64 --out=release --overwrite --icon=public/icon.ico --asar --asar.unpackDir=node_modules/node-pty --ignore=\"^/(work|workspaces|docs|tests|test-results|playwright-report|src|shared|electron|scripts|release)(/|$)\""
+    "package": "npm run build && electron-packager . AlphaCode --platform=win32 --arch=x64 --out=release --overwrite --icon=public/icon.ico --asar.unpackDir=\"node_modules/node-pty/**\" --ignore=\"^/(work|workspaces|docs|tests|test-results|playwright-report|src|shared|electron|scripts|release|target|crates|ui|.cargo|.claude|.superpowers|.github)(/|$)\" --ignore=\"^/(Cargo.(toml|lock)|playwright.config.ts|vite.config.ts|tsconfig.*.json)$\" --ignore=\"^/node_modules/(?!node-pty(/|$))\" --ignore=\"^/node_modules/node-pty/prebuilds/(darwin-|win32-arm64)\" --ignore=\".pdb$\" --ignore=\"^/node_modules/node-pty/(deps|src|third_party|scripts|typings)(/|$)\" --ignore=\"^/node_modules/node-pty/lib/.*.(test.js|map)$\""
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
