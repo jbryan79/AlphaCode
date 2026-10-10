@@ -32,7 +32,7 @@ Orchestrate mode adds a per-workspace toggle, a loopback control server in the m
 
 ### Verified
 
-Unit and integration tests, `tests/orchestrate.test.ts` and `tests/runtime.test.ts`:
+Unit and integration tests, `tests/orchestrate.test.ts`:
 
 - Plan validation: duplicate file, directory claim over a file, six tasks against a cap of five, bad id, absolute path, dirty index and non-git root are each rejected with the named reason.
 - State machine: every signal against every state, the rejected pairs stay rejected, and a `stop` after `done` in the same turn is ignored.
@@ -40,6 +40,7 @@ Unit and integration tests, `tests/orchestrate.test.ts` and `tests/runtime.test.
 - CLI end to end against the real server on a random loopback port, for every subcommand, plus a fake worker that reports through the hooks path.
 - Launch overrides: worker flags built from the plan and pane config, the task prompt header, the CLI folder prepended to PATH, control variables absent from a worker's environment and hook variables absent from the orchestrator's.
 - Wait: resolves on a state change, resolves on timeout, and caps the timeout.
+- In `tests/runtime.test.ts`: the `TerminalManager` env-merge test, where a launch override PATH replaces the inherited one case-insensitively.
 
 Playwright test, real Electron app with stub workers (no Claude session): the toggle, the 6-pane preset, badges, the Tasks section, Approve plan, two stub workers creating real git worktrees and reporting done, the status bar summary, the finish badge, and turning the mode off clearing the badges.
 
@@ -61,7 +62,8 @@ The steps below have not been run. They need a person at the keyboard to answer 
 6. Type `go` (or click Approve plan) and observe two workers start in worktrees, with badges moving Planned, Working, Task done.
 7. Observe the merge, the UAT and red-team output in the orchestrator pane, the finish toast, and the note under `AlphaCode Vault\AlphaCode Runs`.
 8. On a second attempt, restart the orchestrator pane by hand mid-run. Confirm it relaunches with the playbook and the tasks survive.
-9. Confirm that Stop or Notification hooks in `~/.claude/settings.json` still run alongside the `--settings` hooks. This coexistence is untested.
+9. Confirm that each worker's branch, as shown in the Tasks section, is named `worktree-task-<id>`.
+10. Confirm that Stop or Notification hooks in `~/.claude/settings.json` still run alongside the `--settings` hooks. This coexistence is untested.
 
 ### Not verified
 

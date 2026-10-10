@@ -265,8 +265,8 @@ The hooks file:
     "Notification": [ { "hooks": [ { "type": "command", "command": "alphacode report waiting" } ] } ] } }
 ```
 
-Hook files live in `<userData>/orchestrate/<runId>/` and are deleted on finish or when the
-mode turns off.
+Hook files live in `<userData>/orchestrate/<runId>/` and are deleted when the
+mode turns off or the app quits; finish keeps them because the orchestrator keeps using the shim.
 
 ## Retry
 

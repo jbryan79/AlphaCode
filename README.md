@@ -343,8 +343,8 @@ interrupting anything.
 | **Git Bash** | `C:\Program Files\Git\bin\bash.exe` | Set an override if Git is installed elsewhere. |
 | **Custom Command** | none, required | Any executable or `.cmd`/`.bat` script. Never auto-starts by default. |
 
-In Orchestrate mode a Claude pane carries a badge: Orchestrator, Planned, Working, Waiting
-(amber, needs you), Needs attention, Task done, Failed, Interrupted.
+In Orchestrate mode a Claude pane carries a badge: Orchestrator (Done once the run has finished), Planned, Working,
+Waiting (amber, needs you), Needs attention, Task done, Failed, Interrupted.
 
 **First run of a Claude pane in a new folder.** Claude Code asks "Do you trust the files in
 this folder?" and highlights **"No, exit"** by default. Pressing Enter straight away accepts
@@ -521,7 +521,8 @@ Orchestrate mode adds two things next to it:
 
 - `%APPDATA%\alphacode\orchestrate.md`, the playbook. Copied once, then yours.
 - `%APPDATA%\alphacode\orchestrate\<run id>\`, the per-run files (task prompts and worker hook
-  settings). They are deleted when the run finishes or the mode turns off.
+  settings). They are deleted when the mode turns off or the app quits. Finishing a run keeps them, because
+  the orchestrator still uses the `alphacode` command afterwards.
 
 Orchestrate tokens and the channel port are never saved, and exporting a workspace leaves out its
 Orchestrate state. Run notes go to the Claude memory vault (below).
