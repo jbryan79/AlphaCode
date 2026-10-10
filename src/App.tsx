@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import GridLayout, { type Layout } from 'react-grid-layout';
-import { Plus, FolderOpen, ChevronDown, GripVertical, Settings2, Maximize2, Minimize2, Copy, X, Lock, Unlock, Shield, Terminal, Cpu, PanelLeft, ArrowUp, ArrowDown, Download, Upload, Check, AlertCircle, Pencil, Brain } from 'lucide-react';
+import { Plus, FolderOpen, ChevronDown, GripVertical, Settings2, Maximize2, Minimize2, Copy, X, Lock, Unlock, Shield, Terminal, Cpu, PanelLeft, ArrowUp, ArrowDown, Download, Upload, Check, AlertCircle, Pencil, Brain, Workflow } from 'lucide-react';
 import { addPane, applyPreset, balancedLayout, createPane, defaultState, dropTarget, duplicatePane, fillSinglePane, id, moveWorkspace, PANE_TYPES, PRESETS, removePane, reorderPane, swapPane } from '../shared/domain';
-import type { AppState, GridItem, LocalProfile, PaneConfig, PaneType, SessionEvent, SessionStatus, VaultInfo, VaultTarget, Workspace } from '../shared/types';
+import { emptyOrchestrate, TASK_LABELS } from '../shared/orchestrate';
+import type { AppState, GridItem, LocalProfile, OrchestrateEvent, OrchestrateRoles, PaneConfig, PaneType, SessionEvent, SessionStatus, Task, VaultInfo, VaultTarget, Workspace } from '../shared/types';
 import TerminalPane from './TerminalPane';
 import LocalPane from './LocalPane';
 import VaultPane from './VaultPane';
@@ -20,6 +21,7 @@ export default function App() {
   const [state,setState]=useState<AppState|null>(null),[statuses,setStatuses]=useState<Record<string,SessionEvent>>({}),[focused,setFocused]=useState(''),[maximized,setMaximized]=useState('');
   const [relaunch,setRelaunch]=useState<Record<string,number>>({}),[editor,setEditor]=useState<PaneConfig|null>(null),[profileEditor,setProfileEditor]=useState<LocalProfile|null>(null),[nameDialog,setNameDialog]=useState<'rename'|'save-as'|null>(null),[addOpen,setAddOpen]=useState(false),[sidebar,setSidebar]=useState(true),[moveMode,setMoveMode]=useState<'reflow'|'swap'>('reflow'),[notice,setNotice]=useState(''),[saveLabel,setSaveLabel]=useState('Saved locally'),[width,setWidth]=useState(1100),[viewport,setViewport]=useState(850),[statePath,setStatePath]=useState('');
   const [vault,setVault]=useState<VaultInfo|null>(null);
+  const [orch,setOrch]=useState<{approved:boolean;tasks:Task[];finished:string}>({approved:false,tasks:[],finished:''});
   const refreshVault=()=>{if(!window.bridge)return;window.bridge.vaultInfo().then(setVault).catch(e=>setVault({path:'',projects:0,notes:0,obsidian:false,scannedAt:'',message:String(e)}));};
   useEffect(()=>{refreshVault();window.addEventListener('focus',refreshVault);return()=>window.removeEventListener('focus',refreshVault);},[]);
   const gridHost=useRef<HTMLDivElement>(null),dragOrigin=useRef<GridItem[]>([]),stateRef=useRef(state);stateRef.current=state;
@@ -27,8 +29,16 @@ export default function App() {
   const report=(message:string)=>setNotice(message.replace(/^Error:\s*/,''));
   useEffect(()=>{
     if(!window.bridge){report('Open AlphaCode in its desktop app to access terminals.');return;}
-    Promise.all([window.bridge.loadState(),window.bridge.appInfo()]).then(([saved,info])=>{setStatePath(info.statePath);const loaded=saved||defaultState(info.root),next={...loaded,workspaces:loaded.workspaces.map(fillSinglePane)};setState(next);setFocused(next.workspaces.find(w=>w.id===next.activeWorkspaceId)?.panes[0]?.id||'');}).catch(e=>report(`Saved workspace could not load: ${e}`));
-    return window.bridge.onSessionEvent(e=>{if(e.kind==='status')setStatuses(previous=>({...previous,[e.paneId]:e}));});
+    Promise.all([window.bridge.loadState(),window.bridge.appInfo()]).then(([saved,info])=>{setStatePath(info.statePath);const loaded=saved||defaultState(info.root),next={...loaded,workspaces:loaded.workspaces.map(fillSinglePane)};setState(next);setOrch({approved:false,tasks:next.workspaces.find(w=>w.id===next.activeWorkspaceId)?.orchestrate?.tasks||[],finished:''});setFocused(next.workspaces.find(w=>w.id===next.activeWorkspaceId)?.panes[0]?.id||'');}).catch(e=>report(`Saved workspace could not load: ${e}`));
+    const offSession=window.bridge.onSessionEvent(e=>{if(e.kind==='status')setStatuses(previous=>({...previous,[e.paneId]:e}));});
+    const offOrch=window.bridge.onOrchestrateEvent(e=>{
+      if(e.kind==='tasks'){setOrch(o=>({...o,approved:e.approved,tasks:e.tasks}));update(w=>({...w,orchestrate:{...(w.orchestrate||emptyOrchestrate()),approved:e.approved,tasks:e.tasks}}));}
+      else if(e.kind==='launch'){void window.bridge.stopSession(e.paneId).then(()=>setRelaunch(r=>({...r,[e.paneId]:(r[e.paneId]||0)+1}))).catch(err=>report(String(err)));}
+      else if(e.kind==='finished'){setOrch(o=>({...o,finished:e.summary}));setNotice(`Orchestrator finished: ${e.summary}`);}
+      else if(e.kind==='error')report(e.message);
+      else if(e.kind==='off')update(w=>w.orchestrate?{...w,orchestrate:{...w.orchestrate,on:false}}:w);
+    });
+    return()=>{offSession();offOrch();};
   },[]);
   useEffect(()=>{
     // Save at once rather than after a delay: a change made just before the window closes must still reach disk.
@@ -44,14 +54,15 @@ export default function App() {
   const switchWorkspace=async(workspaceId:string)=>{
     if(workspaceId===state?.activeWorkspaceId)return;
     if(workspace?.panes.some(p=>isActive(p.id))&&!window.confirm('Loading a workspace ends the current terminal sessions. Continue?'))return;
-    try{await stopAll();setMaximized('');setStatuses({});setState(s=>s?{...s,activeWorkspaceId:workspaceId}:s);setFocused(state?.workspaces.find(w=>w.id===workspaceId)?.panes[0]?.id||'');}catch(e){report(String(e));}
+    try{if(orchestrate.on)await orchestrateOff();await stopAll();setMaximized('');setStatuses({});setState(s=>s?{...s,activeWorkspaceId:workspaceId}:s);setFocused(state?.workspaces.find(w=>w.id===workspaceId)?.panes[0]?.id||'');}catch(e){report(String(e));}
   };
   const closePane=async(p:PaneConfig)=>{
     if(isActive(p.id)&&!window.confirm(`Close ${p.title} and end its session?`))return;
-    try{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);update(w=>removePane(w,p.id));if(maximized===p.id)setMaximized('');}catch(e){report(String(e));}
+    try{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);if(orchestrate.on&&p.id===orchestrate.orchestratorPaneId)await orchestrateOff();update(w=>removePane(w,p.id));if(maximized===p.id)setMaximized('');}catch(e){report(String(e));}
   };
   const savePane=async(p:PaneConfig)=>{
     const old=workspace?.panes.find(x=>x.id===p.id);if(!old)return;
+    if(orchestrate.on&&p.id===orchestrate.orchestratorPaneId&&p.type!=='claude')await orchestrateOff();
     const launchChanged=old.type!==p.type||old.cwd!==p.cwd||old.command!==p.command||JSON.stringify(old.args)!==JSON.stringify(p.args);
     const wasActive=isActive(p.id),restartable=p.type!=='powershell-admin'&&p.type!=='local-model'&&p.type!=='vault';
     if(launchChanged&&wasActive&&!window.confirm(restartable?'Apply this configuration? The current session ends and a new one starts in its place.':'Apply this configuration and stop the current session?'))return;
@@ -78,6 +89,32 @@ export default function App() {
     if(removed.length&&!window.confirm(`Use ${count} panes? This closes ${removed.length} pane${removed.length===1?'':'s'} and their sessions.`))return;
     try{await Promise.all(removed.map(async p=>{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);}));update(w=>applyPreset(w,count));setMaximized('');}catch(e){report(String(e));}
   };
+  const orchestrate=workspace?.orchestrate||emptyOrchestrate();
+  const orchestrateOn=async()=>{
+    if(!workspace)return;
+    const removed=workspace.panes.slice(6);
+    if(removed.length&&!window.confirm(`Orchestrate uses the 6 pane layout. This closes ${removed.length} pane${removed.length===1?'':'s'} and their sessions.`))return;
+    let w=applyPreset(workspace,6,'claude');
+    const focusedClaude=w.panes.find(p=>p.id===focused&&p.type==='claude'),first=w.panes.find(p=>p.type==='claude');
+    const orchestrator=focusedClaude||first; if(!orchestrator){report('Orchestrate needs a Claude pane.');return;}
+    if(isActive(orchestrator.id)&&!window.confirm(`${orchestrator.title} becomes the orchestrator. Its session restarts with the control channel. Continue?`))return;
+    const roles:OrchestrateRoles={workspaceId:w.id,root:orchestrator.cwd,orchestratorPaneId:orchestrator.id,workerPaneIds:w.panes.filter(p=>p.type==='claude'&&p.id!==orchestrator.id).map(p=>p.id),advisorPaneIds:w.panes.filter(p=>p.type==='local-model').map(p=>p.id),maxWorkers:orchestrate.maxWorkers,resume:orchestrate.tasks.filter(t=>t.state==='interrupted')};
+    try{await Promise.all(removed.map(async p=>{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);}));
+      const testEnv=await window.bridge.orchestrateStart(roles);if(testEnv)(window as any).__orchestrateEnv={ALPHACODE_CONTROL_URL:testEnv.url,ALPHACODE_CONTROL_TOKEN:testEnv.token};
+      w={...w,orchestrate:{...orchestrate,on:true,orchestratorPaneId:orchestrator.id,approved:false,tasks:orchestrate.tasks.filter(t=>t.state==='interrupted')}};
+      setState(s=>s?{...s,workspaces:s.workspaces.map(x=>x.id===w.id?w:x)}:s);setMaximized('');setOrch({approved:false,tasks:w.orchestrate!.tasks,finished:''});
+      await window.bridge.stopSession(orchestrator.id);setRelaunch(r=>({...r,[orchestrator.id]:(r[orchestrator.id]||0)+1}));setFocused(orchestrator.id);
+    }catch(e){report(String(e));update(x=>x.orchestrate?{...x,orchestrate:{...x.orchestrate,on:false}}:x);}
+  };
+  const orchestrateOff=async()=>{try{await window.bridge.orchestrateStop();}catch(e){report(String(e));}update(w=>({...w,orchestrate:{...orchestrate,on:false,approved:false,tasks:[]}}));setOrch({approved:false,tasks:[],finished:''});};
+  const taskFor=(paneId:string)=>orch.tasks.find(t=>t.paneId===paneId);
+  const badge=(p:PaneConfig):{cls:string;text:string}|null=>{
+    if(!orchestrate.on)return null;
+    if(p.id===orchestrate.orchestratorPaneId)return orch.finished?{cls:'done',text:'Done'}:{cls:'orchestrator',text:'Orchestrator'};
+    const t=taskFor(p.id);return t&&!t.hidden?{cls:t.state,text:TASK_LABELS[t.state]}:null;
+  };
+  const counts=(s:Task['state'])=>orch.tasks.filter(t=>t.state===s).length;
+  const elapsed=(t:Task)=>{if(!t.startedAt)return '';const s=Math.round(((t.finishedAt?Date.parse(t.finishedAt):Date.now())-Date.parse(t.startedAt))/1000);return `${Math.floor(s/60)}m ${s%60}s`;};
   const copyPane=(p:PaneConfig)=>{if((workspace?.panes.length||0)>=32){report('A workspace supports up to 32 panes.');return;}update(w=>duplicatePane(w,p.id));};
   const reorder=(from:string,to:string)=>{if(workspace?.locked)return;update(w=>moveMode==='swap'?swapPane(w,from,to):reorderPane(w,from,to));};
   const saveNamed=async(name:string)=>{
@@ -99,10 +136,15 @@ export default function App() {
     <header className="app-toolbar"><div className="brand"><span className="brand-mark"><Terminal size={17}/></span><strong>AlphaCode</strong></div>{!sidebar&&<><span className="toolbar-divider"/><span className="workspace-title">{workspace.name}</span></>}
       <div className="toolbar-actions"><button className="ghost" aria-label="Toggle workspace sidebar" onClick={()=>setSidebar(!sidebar)}><PanelLeft size={16}/></button><div className="presets" aria-label="Layout presets">{PRESETS.map(n=><button key={n} className={workspace.panes.length===n?'selected':''} onClick={()=>void preset(n)}>{n}<span> pane{n===1?'':'s'}</span></button>)}</div>
       <button className="ghost" aria-label={workspace.locked?'Unlock layout':'Lock layout'} title={workspace.locked?'Unlock layout':'Lock layout'} onClick={()=>update(w=>({...w,locked:!w.locked}))}>{workspace.locked?<Lock size={14}/>:<Unlock size={14}/>}<span>{workspace.locked?'Layout locked':'Layout editable'}</span></button>
+      <button className={`ghost ${orchestrate.on?'selected':''}`} aria-label={orchestrate.on?'Turn orchestrate off':'Turn orchestrate on'} title="One Claude pane plans and runs tasks in the others" onClick={()=>void (orchestrate.on?orchestrateOff():orchestrateOn())}><Workflow size={14}/><span>Orchestrate</span></button>
+      {!orchestrate.on&&<label className="max-workers" title="Most workers at once"><input aria-label="Max workers" type="number" min={1} max={5} value={orchestrate.maxWorkers} onChange={e=>update(w=>({...w,orchestrate:{...orchestrate,maxWorkers:Math.min(5,Math.max(1,Number(e.target.value)||1))}}))}/></label>}
       <div className="add-menu"><button className="primary" aria-expanded={addOpen} onClick={()=>setAddOpen(!addOpen)}><Plus size={15}/>Add pane<ChevronDown size={13}/></button>{addOpen&&<div className="dropdown">{PANE_TYPES.map(t=><button key={t.type} onClick={()=>add(t.type)}><PaneIcon type={t.type} size={14}/><span>{t.label}</span></button>)}<button className="dropdown-folder" onClick={()=>void addFromFolder()}><FolderOpen size={14}/><span>Browse for a folder…</span></button></div>}</div></div>
     </header>
     {sidebar&&<aside className="sidebar"><section className="workspace-section"><div className="section-heading"><span>Workspace</span><button aria-label="Rename workspace" onClick={()=>setNameDialog('rename')}><Pencil size={12}/></button></div><select aria-label="Load workspace" value={workspace.id} onChange={e=>void switchWorkspace(e.target.value)}>{state.workspaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select><button className="project-path" onClick={()=>void chooseRoot()} title={workspace.root}><FolderOpen size={14}/><span>{workspace.root}</span></button><div className="workspace-buttons"><button onClick={()=>setNameDialog('save-as')}><Copy size={12}/>Save as</button><button aria-label="Export workspace" title="Export workspace JSON" onClick={()=>window.bridge.exportWorkspace(workspace).catch(e=>report(String(e)))}><Download size={14}/></button><button aria-label="Import workspace" title="Import workspace JSON" onClick={()=>void importLayout()}><Upload size={14}/></button></div></section>
       <section className="pane-list-section"><div className="section-heading"><span>Panes</span></div><div className="pane-list">{workspace.panes.map((p,n)=><div key={p.id} data-color={p.color||''} className={`pane-list-item ${focused===p.id?'active':''}`} draggable={!workspace.locked} onDragStart={e=>e.dataTransfer.setData('text/plain',p.id)} onDragOver={e=>{if(!workspace.locked)e.preventDefault();}} onDrop={e=>{e.preventDefault();reorder(e.dataTransfer.getData('text/plain'),p.id);}}><button className="pane-list-name" onClick={()=>{setFocused(p.id);if(maximized)setMaximized(p.id);document.getElementById(`pane-${p.id}`)?.scrollIntoView({block:'nearest'});}}><span className={`status-dot ${getStatus(p.id)}`}/><PaneIcon type={p.type} size={13}/><span>{p.title}</span></button><div className="list-reorder"><button disabled={workspace.locked||n===0} aria-label={`Move ${p.title} up`} onClick={()=>reorder(p.id,workspace.panes[n-1].id)}><ArrowUp size={10}/></button><button disabled={workspace.locked||n===workspace.panes.length-1} aria-label={`Move ${p.title} down`} onClick={()=>reorder(p.id,workspace.panes[n+1].id)}><ArrowDown size={10}/></button></div></div>)}</div></section>
+      {orchestrate.on&&<section className="tasks-section"><div className="section-heading"><span>Tasks</span>{orch.tasks.length>0&&!orch.approved&&<button className="primary" onClick={()=>window.bridge.approvePlan().catch(e=>report(String(e)))}>Approve plan</button>}</div>
+        {orch.tasks.length===0?<div className="tasks-empty">Waiting for a plan.</div>:orch.tasks.map(t=><button key={t.id} className="task-row" data-task-id={t.id} onClick={()=>{setFocused(t.paneId);if(maximized)setMaximized(t.paneId);}}><span className={`status-dot task-${t.state}`}/><span className="task-main"><strong>{t.title}</strong><small>{workspace.panes.find(p=>p.id===t.paneId)?.title||t.paneId} · {t.model}{t.branch?` · ${t.branch}`:''}</small></span><span className="task-state">{TASK_LABELS[t.state]}{elapsed(t)?<small>{elapsed(t)}</small>:null}{t.message&&<small title={t.message}>{t.message}</small>}</span></button>)}
+      </section>}
       <section className="profiles-section"><div className="section-heading"><span>Local model profiles</span><button aria-label="Add local model profile" onClick={()=>setProfileEditor({id:id(),name:'New profile',provider:'ollama',endpoint:'http://localhost:11434',model:'',systemPrompt:'You are a helpful assistant.',contextSize:32768,temperature:0.7})}><Plus size={13}/></button></div>{state.profiles.map(p=><button className="profile-list-item" key={p.id} onClick={()=>setProfileEditor(p)}><Cpu size={14}/><span><strong>{p.name}</strong><small>{p.model||'Select a model'}</small></span><Settings2 size={12}/></button>)}</section>
       <section className="vault-section"><div className="section-heading"><span>Claude memory</span></div>
         <div className="vault-meta"><span>{vault?`${vault.projects} projects · ${vault.notes} notes`:'Scanning…'}</span>{vault?.path&&<span title={vault.path}>{vault.path}</span>}</div>
@@ -122,14 +164,14 @@ export default function App() {
           }}
           onResizeStop={layout=>update(w=>({...w,layout:layout.map(l=>({i:l.i,x:l.x,y:l.y,w:l.w,h:l.h,minW:3,minH:3}))}))}>
           {workspace.panes.map(p=><div key={p.id} id={`pane-${p.id}`} data-pane-id={p.id} data-pane-title={p.title} data-color={p.color||''} className={`pane ${p.type==='powershell-admin'?'admin-pane':''} ${focused===p.id?'focused':''} ${maximized===p.id?'maximized':''}`} onPointerDown={()=>{if(focused!==p.id)setFocused(p.id);}}>
-            <header className="pane-header"><div className="pane-drag-handle" title={workspace.locked?'Layout locked':'Drag to arrange'}><GripVertical size={12}/><PaneIcon type={p.type} size={14}/><strong title={p.title}>{p.title}</strong></div><span className={`pane-status ${getStatus(p.id)}`} title={statuses[p.id]?.message}><span className={`status-dot ${getStatus(p.id)}`}/>{p.type==='powershell-admin'&&getStatus(p.id)==='running'?'Admin':getStatus(p.id)==='idle'?'Ready':getStatus(p.id)}</span><div className="pane-actions"><button aria-label={`Configure ${p.title}`} title="Configure and rename" onClick={()=>setEditor(p)}><Settings2 size={13}/></button><button aria-label={`Duplicate ${p.title}`} title="Duplicate configuration" onClick={()=>copyPane(p)}><Copy size={12}/></button><button aria-label={maximized===p.id?`Restore ${p.title}`:`Maximize ${p.title}`} title="Focus pane" onClick={()=>{setMaximized(maximized===p.id?'':p.id);setFocused(p.id);}}>{maximized===p.id?<Minimize2 size={13}/>:<Maximize2 size={13}/>}</button><button aria-label={`Close ${p.title}`} title="Close pane" onClick={()=>void closePane(p)}><X size={13}/></button></div></header>
+            <header className="pane-header"><div className="pane-drag-handle" title={workspace.locked?'Layout locked':'Drag to arrange'}><GripVertical size={12}/><PaneIcon type={p.type} size={14}/><strong title={p.title}>{p.title}</strong></div>{(()=>{const b=badge(p);return b?<span className={`pane-badge ${b.cls}`}>{b.text}</span>:null;})()}<span className={`pane-status ${getStatus(p.id)}`} title={statuses[p.id]?.message}><span className={`status-dot ${getStatus(p.id)}`}/>{p.type==='powershell-admin'&&getStatus(p.id)==='running'?'Admin':getStatus(p.id)==='idle'?'Ready':getStatus(p.id)}</span><div className="pane-actions"><button aria-label={`Configure ${p.title}`} title="Configure and rename" onClick={()=>setEditor(p)}><Settings2 size={13}/></button><button aria-label={`Duplicate ${p.title}`} title="Duplicate configuration" onClick={()=>copyPane(p)}><Copy size={12}/></button><button aria-label={maximized===p.id?`Restore ${p.title}`:`Maximize ${p.title}`} title="Focus pane" onClick={()=>{setMaximized(maximized===p.id?'':p.id);setFocused(p.id);}}>{maximized===p.id?<Minimize2 size={13}/>:<Maximize2 size={13}/>}</button><button aria-label={`Close ${p.title}`} title="Close pane" onClick={()=>void closePane(p)}><X size={13}/></button></div></header>
             <button className="pane-directory" title={`${p.cwd}\nClick to change folder`} aria-label={`Change folder for ${p.title}`} onClick={()=>void changeFolder(p)}><FolderOpen size={11}/><span>{p.cwd}</span>{p.type==='powershell-admin'&&<span className="admin-label">UAC session</span>}</button>
             {p.type==='vault'?<VaultPane pane={p} profiles={state.profiles} workspaces={state.workspaces.map(w=>({id:w.id,name:w.name}))} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))} onLaunch={launchProject} onLoadWorkspace={id=>void switchWorkspace(id)}/>:p.type==='local-model'?<LocalPane pane={p} profiles={state.profiles} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))}/>:<TerminalPane pane={p} status={getStatus(p.id)} focused={focused===p.id} message={statuses[p.id]?.message} relaunch={relaunch[p.id]||0} onError={report}/>}
           </div>)}
         </GridLayout>
       </div>
     </main>
-    <footer className="app-statusbar"><span><span className="status-dot running"/>Local terminal cockpit</span><span>{workspace.locked?'Layout locked':'Layout editable'}<span className="statusbar-separator">|</span><span className="save-state" title={statePath?`Saved to ${statePath}`:'Saved on this computer'}><Check size={11}/>{saveLabel}</span></span></footer>
+    <footer className="app-statusbar"><span><span className="status-dot running"/>{orchestrate.on?`Orchestrate · ${counts('working')} working · ${counts('waiting')} waiting · ${counts('done')} done`:'Local terminal cockpit'}</span><span>{workspace.locked?'Layout locked':'Layout editable'}<span className="statusbar-separator">|</span><span className="save-state" title={statePath?`Saved to ${statePath}`:'Saved on this computer'}><Check size={11}/>{saveLabel}</span></span></footer>
     {notice&&<div className="notice" role="status"><AlertCircle size={16}/><span>{notice}</span><button aria-label="Dismiss notification" onClick={()=>setNotice('')}><X size={14}/></button></div>}
     {editor&&<PaneEditor key={editor.id} pane={editor} profiles={state.profiles} onSave={p=>void savePane(p)} onClose={()=>setEditor(null)} onError={report}/>}
     {profileEditor&&<ProfileEditor key={profileEditor.id} profile={profileEditor} onSave={p=>{setState(s=>s?{...s,profiles:s.profiles.some(x=>x.id===p.id)?s.profiles.map(x=>x.id===p.id?p:x):[...s.profiles,p]}:s);setProfileEditor(null);}} onClose={()=>setProfileEditor(null)}/>}

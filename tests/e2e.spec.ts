@@ -3,6 +3,9 @@ import { mkdir, rm, readFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { createServer } from 'node:http';
 import type { AppState } from '../shared/types';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 const root=resolve(__dirname,'..'),dataDir=join(root,'work','e2e-state');
 let app:ElectronApplication,page:Page;const errors:string[]=[];
@@ -122,4 +125,40 @@ test('a change made just before closing the window survives, and the window geom
   const after=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getContentBounds());
   expect([after.x,after.y]).toEqual([bounds.x,bounds.y]);expect(Math.abs(after.width-bounds.width)).toBeLessThanOrEqual(3);expect(Math.abs(after.height-bounds.height)).toBeLessThanOrEqual(3);
   expect(errors).toEqual([]);
+});
+
+test('orchestrate mode runs a two-task plan through stub workers', async () => {
+  // Earlier tests reshape the workspace; start from the default 8 panes again.
+  await app.close(); await rm(dataDir, { recursive: true, force: true }); await mkdir(dataDir, { recursive: true }); await launch();
+  const repo = await mkdtemp(join(tmpdir(), 'alphacode-orch-e2e-'));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo }); await writeFile(join(repo, 'README.md'), '# e2e\n'); execFileSync('git', ['add', '.'], { cwd: repo }); execFileSync('git', ['-c', 'user.email=e2e@x', '-c', 'user.name=e2e', 'commit', '-qm', 'init'], { cwd: repo });
+  const stub = join(root, 'tests', 'fixtures', 'fake-claude.cmd');
+  // Point every Claude pane at the stub and the repo, then turn the mode on.
+  for (const name of ['Claude A', 'Claude B', 'Claude C', 'Claude D']) {
+    await page.getByRole('button', { name: `Configure ${name}`, exact: true }).click();
+    await page.getByLabel('Executable override (optional)', { exact: true }).fill(stub); await page.getByLabel('Working directory', { exact: true }).fill(repo);
+    await page.getByRole('button', { name: 'Apply changes' }).click();
+  }
+  await page.locator('.pane[data-pane-title="Claude A"]').click();
+  await page.getByRole('button', { name: 'Turn orchestrate on', exact: true }).click();
+  await expect(page.locator('.pane')).toHaveCount(6);
+  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-badge')).toHaveText('Orchestrator');
+  await expect(page.locator('.tasks-section')).toContainText('Waiting for a plan');
+  // Drive the control channel the way the orchestrator would, using the pane's own environment.
+  const env = await page.evaluate(async () => (window as any).__orchestrateEnv);
+  const dir = await mkdtemp(join(tmpdir(), 'alphacode-plan-'));
+  await writeFile(join(dir, 'a.md'), 'A task'); await writeFile(join(dir, 'b.md'), 'B task');
+  await writeFile(join(dir, 'plan.json'), JSON.stringify({ tests: '', tasks: [{ id: 'a', title: 'Alpha', files: ['a/'], model: 'sonnet', minutes: 5, advisor: false, prompt: 'a.md' }, { id: 'b', title: 'Beta', files: ['b/'], model: 'sonnet', minutes: 5, advisor: false, prompt: 'b.md' }] }));
+  const cli = (...a: string[]) => execFileSync('node', [join(root, 'dist-electron', 'electron', 'cli.js'), ...a], { env: { ...process.env, ...env }, encoding: 'utf8' });
+  cli('plan', join(dir, 'plan.json'));
+  await expect(page.locator('.task-row')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Approve plan', exact: true }).click();
+  cli('task', 'start', 'a'); cli('task', 'start', 'b');
+  await expect(page.locator('.pane-badge', { hasText: 'Task done' })).toHaveCount(2);
+  expect(execFileSync('git', ['worktree', 'list'], { cwd: repo, encoding: 'utf8' })).toContain('task-a');
+  await expect(page.locator('.app-statusbar')).toContainText('2 done');
+  await writeFile(join(dir, 'r.md'), 'E2E finished.'); cli('finish', join(dir, 'r.md'));
+  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-badge')).toHaveText('Done');
+  await page.getByRole('button', { name: 'Turn orchestrate off', exact: true }).click();
+  await expect(page.locator('.pane-badge')).toHaveCount(0);
 });

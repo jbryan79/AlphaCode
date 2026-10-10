@@ -193,7 +193,7 @@ describe('control server', () => {
     await new Promise(r => setTimeout(r, 20));
     const sid = f.run.tasks()[0].sessionId; expect(sid).not.toBe('');
     expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409); expect(f.run.tasks()[0].sessionId).toBe(sid);
-    const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2'));
+    const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2')); expect(o.env!.ALPHACODE_RUN_DIR_SHIM).toBe(f.runDir);
     release(); expect((await first).status).toBe(200);
     const bad = await fixture({ launch: async () => { throw new Error('Cannot find claude'); } });
     await call(bad.run, bad.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
