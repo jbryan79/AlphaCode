@@ -19,5 +19,9 @@ const bridge:BridgeApi={
   vaultInfo:()=>ipcRenderer.invoke('bridge:vault-info'),
   openVault:()=>ipcRenderer.invoke('bridge:open-vault'),
   showVaultFolder:()=>ipcRenderer.invoke('bridge:show-vault-folder'),
+  vaultGraph:()=>ipcRenderer.invoke('bridge:vault-graph'),
+  vaultAsk:(paneId,profile,question)=>ipcRenderer.invoke('bridge:vault-ask',paneId,profile,question),
+  vaultResolve:(name,workspaces)=>ipcRenderer.invoke('bridge:vault-resolve',name,workspaces),
+  openObsidianVault:path=>ipcRenderer.invoke('bridge:open-obsidian-vault',path),
 };
 contextBridge.exposeInMainWorld('bridge',bridge);

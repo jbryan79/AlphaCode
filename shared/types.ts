@@ -30,4 +30,8 @@ export interface BridgeApi {
   vaultInfo(): Promise<VaultInfo>;
   openVault(): Promise<void>;
   showVaultFolder(): Promise<void>;
+  vaultGraph(): Promise<VaultGraph>;
+  vaultAsk(paneId: string, profile: LocalProfile, question: string): Promise<{ answer: string; notes: string[] }>;
+  vaultResolve(name: string, workspaces: { id: string; name: string }[]): Promise<VaultTarget[]>;
+  openObsidianVault(path: string): Promise<void>;
 }

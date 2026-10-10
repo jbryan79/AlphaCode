@@ -1,6 +1,54 @@
 import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildGraph, buildMessages, COMMAND, matchTargets, nameKey, parseAnswer, pickNotes, scoreNote, tokens, type NoteMeta } from '../shared/vault';
-import type { VaultTarget } from '../shared/types';
+import { MemoryVault } from '../electron/vault';
+import type { ChatMessage, LocalProfile, VaultTarget } from '../shared/types';
+
+const profile: LocalProfile = { id: 'local', name: 'Local', provider: 'ollama', endpoint: 'http://127.0.0.1:11434', model: 'test', systemPrompt: 'IGNORED', contextSize: 4096, temperature: 0.4 };
+async function vaultFixture(reply: string) {
+  const root = await mkdtemp(join(tmpdir(), 'alphacode-vp-'));
+  const dir = join(root, 'claude', 'projects', 'D--Dev-PeptideSciences101'); await mkdir(join(dir, 'memory'), { recursive: true });
+  await writeFile(join(dir, 'a.jsonl'), JSON.stringify({ cwd: 'D:\\Dev\\PeptideSciences101' }) + '\n');
+  await writeFile(join(dir, 'memory', 'fonts.md'), '---\nname: fonts\ndescription: Segoe UI everywhere\nmetadata:\n  type: feedback\n---\nUse Segoe UI, headings Semibold.\n');
+  await writeFile(join(dir, 'memory', 'stack.md'), '---\nname: stack\ndescription: Razor Pages\nmetadata:\n  type: project\n---\nNo React.\n');
+  await writeFile(join(root, 'obsidian.json'), JSON.stringify({ vaults: { a: { path: 'E:\\Brain\\PeptideSciences101-Graph' }, b: { path: 'E:\\Brain\\Brain' } } }));
+  const calls: { paneId: string; profile: LocalProfile; messages: ChatMessage[] }[] = [];
+  const providers = { chat: async (paneId: string, p: LocalProfile, messages: ChatMessage[]) => { calls.push({ paneId, profile: p, messages }); return reply; } } as any;
+  const vault = new MemoryVault(join(root, 'vault'), join(root, 'claude'), 'x', join(root, 'obsidian.json'), providers);
+  return { root, vault, calls };
+}
+
+describe('MemoryVault questions and commands', () => {
+  it('asks the model with matching notes only and without the profile system prompt', async () => {
+    const f = await vaultFixture('Segoe UI, Semibold headings.\nNotes used: fonts');
+    const r = await f.vault.ask('p1', profile, 'which fonts?');
+    expect(r).toEqual({ answer: 'Segoe UI, Semibold headings.', notes: ['fonts'] });
+    expect(f.calls[0].profile.systemPrompt).toBe(''); expect(f.calls[0].messages[0].role).toBe('system');
+    expect(f.calls[0].messages[1].content).toContain('### fonts'); expect(f.calls[0].messages[1].content).not.toContain('### stack');
+    const empty = await f.vault.ask('p1', profile, 'is it ok');
+    expect(f.calls[1].messages[1].content).toContain('No notes in the vault match'); expect(empty.notes).toEqual([]);
+    await expect(f.vault.ask('bad id!', profile, 'x')).rejects.toThrow();
+    await expect(f.vault.ask('p1', profile, '   ')).rejects.toThrow();
+    await rm(f.root, { recursive: true, force: true });
+  });
+  it('resolves launch targets across projects, Obsidian vaults and workspaces', async () => {
+    const f = await vaultFixture('');
+    const t = await f.vault.resolve('Peptide Sciences 101', [{ id: 'w1', name: 'Peptide Day' }]);
+    expect(t).toEqual([{ kind: 'project', name: 'PeptideSciences101', path: 'D:\\Dev\\PeptideSciences101' }, { kind: 'obsidian', name: 'PeptideSciences101-Graph', path: 'E:\\Brain\\PeptideSciences101-Graph' }]);
+    expect(await f.vault.resolve('peptide day', [{ id: 'w1', name: 'Peptide Day' }])).toEqual([{ kind: 'workspace', name: 'Peptide Day', path: 'w1' }]);
+    await expect(f.vault.resolve('x', [{ id: 'bad id', name: 'n' }])).rejects.toThrow();
+    expect(f.vault.graph().nodes.map(n => n.id)).toEqual(['hub:PeptideSciences101', 'PeptideSciences101/fonts', 'PeptideSciences101/stack']);
+    await rm(f.root, { recursive: true, force: true });
+  });
+  it('only opens registered Obsidian vaults', async () => {
+    const f = await vaultFixture('');
+    expect(await f.vault.obsidianUrl('e:\\brain\\brain\\')).toBe('obsidian://open?path=e%3A%5Cbrain%5Cbrain%5C');
+    await expect(f.vault.obsidianUrl('C:\\Windows')).rejects.toThrow(/registered/);
+    await rm(f.root, { recursive: true, force: true });
+  });
+});
 
 const note = (over: Partial<NoteMeta>): NoteMeta => ({ name: 'n', description: '', type: 'other', modified: '', project: 'P', file: '', links: [], body: '', ...over });
 

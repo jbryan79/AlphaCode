@@ -46,6 +46,10 @@ function registerIpc():void{
   handle('bridge:vault-info',()=>vault.info());
   handle('bridge:open-vault',()=>shell.openExternal(vault.obsidianInstalled()?`obsidian://open?path=${encodeURIComponent(vault.path)}`:'https://obsidian.md/download'));
   handle('bridge:show-vault-folder',async()=>{const problem=await shell.openPath(vault.path);if(problem)throw new Error(problem);});
+  handle('bridge:vault-graph',()=>vault.graph());
+  handle('bridge:vault-ask',(id,profile,question)=>vault.ask(id,profile,question));
+  handle('bridge:vault-resolve',(name,workspaces)=>vault.resolve(name,workspaces));
+  handle('bridge:open-obsidian-vault',async(path:string)=>{await shell.openExternal(await vault.obsidianUrl(path));});
 }
 
 const windowPath=join(app.getPath('userData'),'window.json');

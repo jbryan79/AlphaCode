@@ -1,8 +1,9 @@
 import { mkdir, readdir, readFile, lstat, stat, symlink, readlink, unlink, rmdir, writeFile, open } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import type { VaultInfo } from '../shared/types';
-import { cwdFromTranscript, homeNote, hubNote, isGenerated, parseFrontmatter, TYPES, uniqueNames, wikilinks, type NoteMeta } from '../shared/vault';
+import type { LocalProfile, VaultGraph, VaultInfo, VaultTarget } from '../shared/types';
+import { validateId, validateProfile, string as str } from '../shared/domain';
+import { buildGraph, buildMessages, cwdFromTranscript, homeNote, hubNote, isGenerated, matchTargets, parseAnswer, parseFrontmatter, pickNotes, TYPES, uniqueNames, wikilinks, type NoteMeta } from '../shared/vault';
 import type { ProviderClient } from './providers';
 
 interface Project { slug: string; name: string; cwd: string; memoryDir: string; }
@@ -69,5 +70,29 @@ export class MemoryVault {
       await removeLink(link);
     }
     for (const [name, target] of wanted) await symlink(target, join(dir, name), 'junction');
+  }
+  graph(): VaultGraph { return buildGraph(this.notes); }
+  async ask(paneId: string, profile: LocalProfile, question: string): Promise<{ answer: string; notes: string[] }> {
+    validateId(paneId); const p = validateProfile(profile), q = str(question, 'question', 4000); if (!q.trim()) throw new Error('Ask something first.');
+    if (!this.last) await this.scan();
+    const context = pickNotes(this.notes, q);
+    const text = await this.providers.chat(paneId, { ...p, systemPrompt: '' }, buildMessages(context, q));
+    return parseAnswer(text, context.map(n => n.name));
+  }
+  private async obsidianVaults(): Promise<{ name: string; path: string }[]> {
+    try { const reg = JSON.parse(await readFile(this.obsidianRegistry, 'utf8')); return Object.values(reg.vaults || {}).flatMap((v: any) => typeof v?.path === 'string' && v.path ? [{ name: basename(v.path), path: v.path }] : []); } catch { return []; }
+  }
+  async resolve(name: string, workspaces: { id: string; name: string }[]): Promise<VaultTarget[]> {
+    const query = str(name, 'target name', 200); if (!Array.isArray(workspaces) || workspaces.length > 50) throw new Error('Invalid workspace list');
+    if (!this.last) await this.scan();
+    return matchTargets(query, [
+      ...this.projects.filter(p => p.cwd).map(p => ({ kind: 'project' as const, name: p.name, path: p.cwd })),
+      ...(await this.obsidianVaults()).map(v => ({ kind: 'obsidian' as const, ...v })),
+      ...workspaces.map(w => ({ kind: 'workspace' as const, name: str(w.name, 'workspace name', 100), path: validateId(w.id) })),
+    ]);
+  }
+  async obsidianUrl(path: string): Promise<string> {
+    const p = str(path, 'vault path', 32768); if (!(await this.obsidianVaults()).some(v => samePath(v.path, p))) throw new Error('That folder is not a registered Obsidian vault.');
+    return `obsidian://open?path=${encodeURIComponent(p)}`;
   }
 }
