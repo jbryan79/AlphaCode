@@ -25,3 +25,46 @@ The application checks its actual Windows token and refuses to run elevated. Adm
 ## Verification boundary
 
 Interactive elevated ConPTY/UAC remains unverified and requires a human approval; tests never initiate UAC. Full renderer E2E and packaged executable verification are recorded by the primary integration agent separately. Packaging must retain node-pty's prebuilt native modules and bundled ConPTY DLLs in usable paths. The isolated native smoke verifies the actual Electron ABI and normal PTY workflow, not the interactive elevation approval path.
+
+## Orchestrate mode
+
+Orchestrate mode adds a per-workspace toggle, a loopback control server in the main process with two token classes, the `alphacode` command, worker launches in git worktrees, pane badges, a Tasks sidebar section with Approve plan, a status bar summary, finish and "Worker needs you" toasts, a run note in the Claude memory vault under `AlphaCode Runs`, an editable playbook at `%APPDATA%\alphacode\orchestrate.md`, and a Playwright test that drives a two-task plan through stub workers. The real run with Claude Code and a local advisor model has **not been performed**. This section records what the automated suite proves and what is still pending.
+
+### Verified
+
+Unit and integration tests, `tests/orchestrate.test.ts` and `tests/runtime.test.ts`:
+
+- Plan validation: duplicate file, directory claim over a file, six tasks against a cap of five, bad id, absolute path, dirty index and non-git root are each rejected with the named reason.
+- State machine: every signal against every state, the rejected pairs stay rejected, and a `stop` after `done` in the same turn is ignored.
+- Token classes: control endpoints reject the hook token and a missing token; `report` rejects the control token and a hook token minted for another pane id.
+- CLI end to end against the real server on a random loopback port, for every subcommand, plus a fake worker that reports through the hooks path.
+- Launch overrides: worker flags built from the plan and pane config, the task prompt header, the CLI folder prepended to PATH, control variables absent from a worker's environment and hook variables absent from the orchestrator's.
+- Wait: resolves on a state change, resolves on timeout, and caps the timeout.
+
+Playwright test, real Electron app with stub workers (no Claude session): the toggle, the 6-pane preset, badges, the Tasks section, Approve plan, two stub workers creating real git worktrees and reporting done, the status bar summary, the finish badge, and turning the mode off clearing the badges.
+
+Task 0 spike against Claude Code 2.1.296, in print mode:
+
+- `--worktree task-x` creates the worktree at `<repo>/.claude/worktrees/<name>` on branch `worktree-<name>`.
+- A Stop hook supplied only through `--settings <file>` fires.
+- `--resume <session id>` run from inside the worktree resumes the session.
+
+### Pending: real run
+
+The steps below have not been run. They need a person at the keyboard to answer Claude Code's prompts.
+
+1. Start Ollama serving `gpt-oss:20b` and set a Local Model profile to it.
+2. Open a workspace whose Claude pane sits in a real git repository with a clean index (untracked files are fine).
+3. Turn Orchestrate on, confirm the orchestrator restart, and note the 6-pane layout and the badges.
+4. Ask for a small two-piece change, for example "add a --version flag to the CLI and document it in the README".
+5. Observe the one-line triage in the orchestrator pane and the plan in the Tasks section.
+6. Type `go` (or click Approve plan) and observe two workers start in worktrees, with badges moving Planned, Working, Task done.
+7. Observe the merge, the UAT and red-team output in the orchestrator pane, the finish toast, and the note under `AlphaCode Vault\AlphaCode Runs`.
+8. On a second attempt, restart the orchestrator pane by hand mid-run. Confirm it relaunches with the playbook and the tasks survive.
+9. Confirm that Stop or Notification hooks in `~/.claude/settings.json` still run alongside the `--settings` hooks. This coexistence is untested.
+
+### Not verified
+
+- Anything involving a live Claude Code TUI: the interactive positional prompt together with `--worktree`, and the worker prompt text being accepted.
+- Merge conflict handling, the retry path against a real worker, and the advisor consultation through `alphacode ask` against a real model.
+- Windows toast appearance in an installed (packaged) build.

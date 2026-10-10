@@ -23,6 +23,7 @@ user profile.
    - [Grid bar](#grid-bar)
    - [Sidebar: Local model profiles](#sidebar-local-model-profiles)
    - [Sidebar: Claude memory](#sidebar-claude-memory)
+   - [Sidebar: Tasks](#sidebar-tasks)
    - [Pane header and footer](#pane-header-and-footer)
    - [Configure pane dialog](#configure-pane-dialog)
    - [Pane types](#pane-types)
@@ -31,6 +32,7 @@ user profile.
    - [Local model panes](#local-model-panes)
    - [Vault pane](#vault-pane)
    - [Local model profile dialog](#local-model-profile-dialog)
+   - [Orchestrator command](#orchestrator-command)
    - [Keyboard](#keyboard)
 5. [Where your data lives](#where-your-data-lives)
 6. [Troubleshooting](#troubleshooting)
@@ -121,6 +123,37 @@ the others, or adding one to an empty workspace) also fills the grid and cannot 
 **Layout editable / Layout locked** (padlock with label). Click to toggle. When locked, panes
 cannot be dragged, resized, or reordered. Terminals keep working normally. Use it once you
 like the arrangement and want to stop accidental drags. The status bar repeats the state.
+
+**Orchestrate** (branching icon) with a **Max workers** number (1 to 5, default 5). Turns
+Orchestrate mode on for this workspace. The 6-pane preset is applied (you are asked to confirm
+if panes would be closed). The focused Claude pane, or the first one, becomes the
+**Orchestrator** and, after you confirm, restarts with a control channel and the orchestration
+playbook. The other Claude panes become workers, padded with new Claude panes named Worker 1, 2
+and so on, and Local Model panes become advisors the orchestrator can consult. Type your request
+into the orchestrator pane. It says whether the work splits, posts a plan to the **Tasks**
+section, and waits for you to type "go" (or click **Approve plan**). Then it runs each task as
+a Claude Code session in a worker pane, in its own git worktree under the project, on a branch
+Claude Code names `worktree-task-<id>`. A worker pane's current session is replaced when its
+task starts. Finished workers stay open with a **Task done** badge until the next task starts
+in that pane or you type in it. When the orchestrator finishes you get a Windows notification,
+and a run note is written to the Claude memory vault under `AlphaCode Runs`. You also get a
+notification when a worker is waiting for you.
+
+- The project folder of the orchestrator pane must be a git repository with a clean index.
+  Untracked files are fine. If the mode cannot start, the toggle snaps back off and the reason
+  shows in the status bar.
+- Stopping or restarting the orchestrator session by hand keeps the mode on. The next start
+  brings back the control channel and the playbook, and the tasks survive.
+- Closing the orchestrator pane, changing its type away from Claude, or switching workspace
+  turns the mode off.
+- Turning it off closes the channel and clears badges and the Tasks section. Every session and
+  every worktree stays. Worktrees are never deleted by turning the mode off.
+- Tasks that were Working or Waiting when you closed the app come back as **Interrupted**.
+
+The playbook is a text file at `%APPDATA%\alphacode\orchestrate.md`. It is copied from the app
+the first time you use the mode and never overwritten afterwards, so edit it freely to change how
+the orchestrator plans, reviews, merges and reports. See
+[Orchestrator command](#orchestrator-command) for the commands it can use.
 
 **Add pane.** Opens a menu of pane types (see [Pane types](#pane-types)). Choosing one adds a
 pane at the bottom of the grid, using the workspace root as its directory, and opens the
@@ -213,6 +246,17 @@ download page. Obsidian is optional and needs
 no account; AlphaCode works exactly the same without it. **Show folder** opens the vault in
 Explorer. See [Claude memory vault](#claude-memory-vault) for what is inside.
 
+### Sidebar: Tasks
+
+Shown only while Orchestrate is on. One row per task, with its title, the pane running it, the
+model, the branch, the state, and the time since it started. A failed task also shows the exit
+code or reason. Click a row to focus its pane. Before a plan exists the section reads
+"Waiting for a plan."
+
+**Approve plan** appears while a plan is waiting for approval. It does the same as typing "go"
+to the orchestrator: no worker starts until the plan is approved. The status bar shows
+`Orchestrate · N working · N waiting · N done` while the mode is on.
+
 ### Pane header and footer
 
 From left to right in the header:
@@ -298,6 +342,9 @@ interrupting anything.
 | **CMD** | `%ComSpec%` (cmd.exe) | Classic command prompt. |
 | **Git Bash** | `C:\Program Files\Git\bin\bash.exe` | Set an override if Git is installed elsewhere. |
 | **Custom Command** | none, required | Any executable or `.cmd`/`.bat` script. Never auto-starts by default. |
+
+In Orchestrate mode a Claude pane carries a badge: Orchestrator, Planned, Working, Waiting
+(amber, needs you), Needs attention, Task done, Failed, Interrupted.
 
 **First run of a Claude pane in a new folder.** Claude Code asks "Do you trust the files in
 this folder?" and highlights **"No, exit"** by default. Pressing Enter straight away accepts
@@ -410,6 +457,29 @@ you load the model in its server, so set it there.
 
 **System prompt.** Sent as the first message of every conversation that uses this profile.
 
+### Orchestrator command
+
+The orchestrator pane has an `alphacode` command on its PATH while the mode is on. The playbook
+uses it; you only need this table if you edit the playbook. It talks to the app over a loopback
+channel and prints JSON. Prompts, plans, feedback and reports are passed as files, never as
+arguments.
+
+| Command | What it does |
+|---|---|
+| `alphacode panes` | Lists panes with their type, folder, session status, role and task state. |
+| `alphacode plan <file> [--approved]` | Validates and stores the task list. `--approved` is used only after you say go. |
+| `alphacode task start <taskId>` | Starts the worker. Refused until the plan is approved. |
+| `alphacode task status [taskId]` | State, elapsed time, branch, model and the last 20 lines of output, for one task or all. |
+| `alphacode task wait [taskId...] --timeout 240` | Waits until a listed task changes state, or the timeout (240 seconds at most). |
+| `alphacode task retry <taskId> <file>` | Sends follow-up feedback from a file to the worker. |
+| `alphacode ask <paneId> <file>` | Sends a prompt from a file to a Local Model pane and prints the answer. |
+| `alphacode finish <file>` | Marks the run done with the file as the report, shows the notification and writes the run note. |
+| `alphacode report done\|failed\|stop\|waiting [message]` | Used by workers to report their own state. Needs the worker's own token. |
+
+A plan lists up to `maxWorkers` tasks (and no more than there are worker panes), each with an id,
+title, the files it owns, a model (`sonnet`, `opus` or `fable`), a time budget of 1 to 240
+minutes, and a prompt file. No file may belong to two tasks.
+
 ### Keyboard
 
 | Keys | In a terminal pane |
@@ -447,6 +517,15 @@ profiles. It does not contain terminal output, chat transcripts, or any secrets.
 - Set the environment variable `ALPHACODE_DATA_DIR` to a folder to keep a completely separate
   set of settings, for example for testing. The end-to-end tests do this.
 
+Orchestrate mode adds two things next to it:
+
+- `%APPDATA%\alphacode\orchestrate.md`, the playbook. Copied once, then yours.
+- `%APPDATA%\alphacode\orchestrate\<run id>\`, the per-run files (task prompts and worker hook
+  settings). They are deleted when the run finishes or the mode turns off.
+
+Orchestrate tokens and the channel port are never saved, and exporting a workspace leaves out its
+Orchestrate state. Run notes go to the Claude memory vault (below).
+
 Editing the file by hand is fine while the app is closed. The app validates it on load and
 refuses anything malformed rather than guessing.
 
@@ -464,7 +543,8 @@ five minutes: it adds junctions for new projects, removes junctions whose projec
 rewrites its own index notes (`Home.md`, one note per project under `Projects\`, one note per
 memory type under `Types\`). Those index notes carry `generated: alphacode` in their frontmatter;
 a file without that marker is never overwritten. Nothing inside Claude's own folders is written
-by AlphaCode.
+by AlphaCode. The one thing AlphaCode adds to the vault itself is `AlphaCode Runs\`, where
+Orchestrate mode writes one note per finished run.
 
 ## Troubleshooting
 
@@ -521,6 +601,8 @@ label for the exit code and look at the terminal for the program's own message.
 | Local model request time | 120 seconds |
 | Local model response size | 8 MB |
 | Workspace import file size | 4 MB |
+| Orchestrate workers | 5 |
+| Task retries | 2 |
 
 ## Development
 
