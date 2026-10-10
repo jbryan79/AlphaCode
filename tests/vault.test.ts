@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, readFile, readlink, rm, rmdir, symlink, writeFile, lstat, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { MemoryVault } from '../electron/vault';
 import { cwdFromTranscript, homeNote, hubNote, isGenerated, parseFrontmatter, sanitizeName, uniqueNames, wikilinks, MARKER, type NoteMeta } from '../shared/vault';
 
 const note = (over: Partial<NoteMeta>): NoteMeta => ({ name: 'n', description: '', type: 'other', modified: '', project: 'P', file: '', links: [], body: '', ...over });
@@ -56,5 +60,72 @@ describe('vault note helpers', () => {
     expect(home).toContain('- [[Types/feedback|feedback]] (1)');
     expect(home).toContain('C:\\x\\projects');
     expect(homeNote([], [], 'C:\\x', 'now')).toContain('No memories yet');
+  });
+});
+
+const memory = (fm: string, body = 'body') => `---\n${fm}\n---\n${body}\n`;
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), 'alphacode-vault-'));
+  const claude = join(root, 'claude'), vault = join(root, 'AlphaCode Vault');
+  const project = async (slug: string, cwd: string | null, notes: Record<string, string>) => {
+    const dir = join(claude, 'projects', slug); await mkdir(join(dir, 'memory'), { recursive: true });
+    if (cwd) await writeFile(join(dir, 'a.jsonl'), JSON.stringify({ type: 'user', cwd }) + '\n');
+    for (const [file, text] of Object.entries(notes)) await writeFile(join(dir, 'memory', file), text);
+  };
+  await project('D--Dev-AlphaCode', 'D:\\Dev\\AlphaCode', { 'MEMORY.md': '# index', 'pick-ponytail.md': memory('name: pick-ponytail\ndescription: Lazy by default\nmetadata:\n  type: feedback'), 'bare.md': 'no frontmatter at all [[pick-ponytail]]' });
+  await project('B--NaviStation-JB', 'B:\\NaviStation_JB', { 'stack.md': memory('name: stack\ndescription: Razor Pages only\nmetadata:\n  type: project') });
+  await project('no-log', null, { 'x.md': memory('name: x\ndescription: d\nmetadata:\n  type: user') });
+  const make = () => new MemoryVault(vault, claude, join(root, 'missing-Obsidian.exe'), join(root, 'obsidian.json'), {} as any);
+  return { root, claude, vault, make, project };
+}
+
+describe('MemoryVault scan', () => {
+  it('builds junctions, hubs, home and obsidian config from the Claude projects folder', async () => {
+    const f = await fixture(); const info = await f.make().scan();
+    expect(info.message).toBe(''); expect(info.projects).toBe(3); expect(info.notes).toBe(4); expect(info.obsidian).toBe(false);
+    expect((await lstat(join(f.vault, 'Projects', 'AlphaCode'))).isSymbolicLink()).toBe(true);
+    expect((await readlink(join(f.vault, 'Projects', 'AlphaCode'))).replace(/^\\\\\?\\/, '').toLowerCase()).toBe(join(f.claude, 'projects', 'D--Dev-AlphaCode', 'memory').toLowerCase());
+    expect(await readFile(join(f.vault, 'Projects', 'AlphaCode', 'pick-ponytail.md'), 'utf8')).toContain('Lazy by default');
+    const hub = await readFile(join(f.vault, 'Projects', 'AlphaCode.md'), 'utf8');
+    expect(hub).toContain('[[Projects/AlphaCode/pick-ponytail|pick-ponytail]] - Lazy by default');
+    expect(hub).toContain('[[Projects/AlphaCode/bare|bare]] - ');
+    expect(hub).not.toContain('[[Projects/AlphaCode/MEMORY|MEMORY]] - ');
+    expect(await readFile(join(f.vault, 'Types', 'other.md'), 'utf8')).toContain('[[Projects/AlphaCode/bare|bare]]');
+    expect(await readFile(join(f.vault, 'Types', 'feedback.md'), 'utf8')).toContain('pick-ponytail');
+    expect(await readFile(join(f.vault, 'Home.md'), 'utf8')).toContain('- [[Projects/NaviStation_JB|NaviStation_JB]] (1)');
+    expect(await readFile(join(f.vault, 'Home.md'), 'utf8')).toContain('- [[Projects/no-log|no-log]] (1)');
+    expect(JSON.parse(await readFile(join(f.vault, '.obsidian', 'graph.json'), 'utf8')).colorGroups.length).toBe(3);
+    await rm(f.root, { recursive: true, force: true });
+  });
+  it('keeps user-written notes, replaces stale junctions, prunes removed projects', async () => {
+    const f = await fixture(); const v = f.make(); await v.scan();
+    await writeFile(join(f.vault, 'Projects', 'AlphaCode.md'), '# mine\n');
+    // Point the NaviStation junction somewhere else, as if the project had moved; the scan must repoint it.
+    await mkdir(join(f.root, 'elsewhere')); await writeFile(join(f.root, 'elsewhere', 'z.md'), 'z');
+    await rmdir(join(f.vault, 'Projects', 'NaviStation_JB'));
+    await symlink(join(f.root, 'elsewhere'), join(f.vault, 'Projects', 'NaviStation_JB'), 'junction');
+    await rm(join(f.claude, 'projects', 'no-log'), { recursive: true, force: true });
+    const info = await v.scan();
+    expect(info.message).toContain('AlphaCode.md');
+    expect(await readFile(join(f.vault, 'Projects', 'AlphaCode.md'), 'utf8')).toBe('# mine\n');
+    expect((await readlink(join(f.vault, 'Projects', 'NaviStation_JB'))).toLowerCase()).toContain('b--navistation-jb');
+    expect((await readdir(join(f.vault, 'Projects'))).some(n => n.startsWith('no-log'))).toBe(false);
+    expect(info.projects).toBe(2);
+    await rm(f.root, { recursive: true, force: true });
+  });
+  it('rebuilds a deleted vault and tolerates a missing projects folder', async () => {
+    const f = await fixture(); const v = f.make(); await v.scan();
+    await rm(f.vault, { recursive: true, force: true });
+    expect((await v.scan()).projects).toBe(3);
+    const empty = new MemoryVault(join(f.root, 'v2'), join(f.root, 'no-claude'), 'x', 'y', {} as any); const info = await empty.scan();
+    expect(info.message).toBe(''); expect(info.projects).toBe(0);
+    expect(await readFile(join(f.root, 'v2', 'Home.md'), 'utf8')).toContain('No memories yet');
+    await rm(f.root, { recursive: true, force: true });
+  });
+  it('shares one in-flight scan and serves info() from the last result', async () => {
+    const f = await fixture(); const v = f.make();
+    const [a, b] = await Promise.all([v.scan(), v.scan()]); expect(a).toBe(b);
+    expect(await v.info()).toBe(a);
+    await rm(f.root, { recursive: true, force: true });
   });
 });
