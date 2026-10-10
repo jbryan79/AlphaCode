@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { BridgeApi, SessionEvent } from '../shared/types';
+import type { BridgeApi, OrchestrateEvent, SessionEvent } from '../shared/types';
 
 const bridge:BridgeApi={
   loadState:()=>ipcRenderer.invoke('bridge:load-state'),
@@ -23,5 +23,9 @@ const bridge:BridgeApi={
   vaultAsk:(paneId,profile,question)=>ipcRenderer.invoke('bridge:vault-ask',paneId,profile,question),
   vaultResolve:(name,workspaces)=>ipcRenderer.invoke('bridge:vault-resolve',name,workspaces),
   openObsidianVault:path=>ipcRenderer.invoke('bridge:open-obsidian-vault',path),
+  orchestrateStart:roles=>ipcRenderer.invoke('bridge:orchestrate-start',roles),
+  orchestrateStop:()=>ipcRenderer.invoke('bridge:orchestrate-stop'),
+  approvePlan:()=>ipcRenderer.invoke('bridge:approve-plan'),
+  onOrchestrateEvent:callback=>{const listener=(_event:Electron.IpcRendererEvent,event:OrchestrateEvent)=>callback(event);ipcRenderer.on('bridge:orchestrate-event',listener);return()=>ipcRenderer.removeListener('bridge:orchestrate-event',listener);},
 };
 contextBridge.exposeInMainWorld('bridge',bridge);

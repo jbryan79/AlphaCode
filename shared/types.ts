@@ -4,7 +4,7 @@ export type SessionStatus = 'idle' | 'starting' | 'running' | 'busy' | 'exited' 
 export interface LocalProfile { id: string; name: string; provider: 'ollama' | 'lmstudio'; endpoint: string; model: string; systemPrompt: string; contextSize: number; temperature: number; }
 export interface PaneConfig { id: string; type: PaneType; title: string; cwd: string; command: string; args: string[]; profileId: string; autoStart: boolean; color?: PaneColor; }
 export interface GridItem { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number; }
-export interface Workspace { id: string; name: string; root: string; panes: PaneConfig[]; layout: GridItem[]; locked: boolean; }
+export interface Workspace { id: string; name: string; root: string; panes: PaneConfig[]; layout: GridItem[]; locked: boolean; orchestrate?: OrchestrateConfig; }
 export interface AppState { version: 1; activeWorkspaceId: string; workspaces: Workspace[]; profiles: LocalProfile[]; }
 export interface SessionEvent { paneId: string; kind: 'data' | 'status'; data?: string; status?: SessionStatus; message?: string; pid?: number; elevated?: boolean; }
 export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; }
@@ -13,6 +13,16 @@ export interface VaultInfo { path: string; projects: number; notes: number; obsi
 export interface VaultGraph { nodes: { id: string; label: string; project: string; type: string }[]; edges: { from: string; to: string }[]; }
 /** `tier`: 0 exact, 1 prefix, 2 contains. Only exact and prefix matches may act without confirmation. */
 export interface VaultTarget { kind: 'project' | 'obsidian' | 'workspace'; name: string; path: string; tier?: 0 | 1 | 2; }
+export type TaskState = 'planned' | 'working' | 'waiting' | 'attention' | 'done' | 'failed' | 'interrupted';
+export type TaskModel = 'sonnet' | 'opus' | 'fable';
+export interface PlanTask { id: string; title: string; files: string[]; model: TaskModel; minutes: number; advisor: boolean; prompt: string; }
+export interface Plan { tests: string; approved: boolean; tasks: PlanTask[]; }
+/** Persisted task. `prompt` is never persisted; the run holds it in memory. */
+export interface Task extends Omit<PlanTask, 'prompt'> { state: TaskState; paneId: string; branch: string; worktree: string; startedAt: string; finishedAt: string; retries: number; sessionId: string; message: string; hidden: boolean; }
+export interface OrchestrateConfig { on: boolean; orchestratorPaneId: string; maxWorkers: number; approved: boolean; tasks: Task[]; }
+/** `resume`: tasks left `interrupted` by an earlier run, so the new run can list them and retry them with --resume. */
+export interface OrchestrateRoles { workspaceId: string; root: string; orchestratorPaneId: string; workerPaneIds: string[]; advisorPaneIds: string[]; maxWorkers: number; resume?: Task[]; }
+export type OrchestrateEvent = { kind: 'tasks'; approved: boolean; tasks: Task[] } | { kind: 'launch'; paneId: string } | { kind: 'finished'; summary: string } | { kind: 'error'; message: string } | { kind: 'off' };
 export interface BridgeApi {
   loadState(): Promise<AppState | null>;
   saveState(state: AppState): Promise<void>;
@@ -35,4 +45,8 @@ export interface BridgeApi {
   vaultAsk(paneId: string, profile: LocalProfile, question: string): Promise<{ answer: string; notes: string[] }>;
   vaultResolve(name: string, workspaces: { id: string; name: string }[]): Promise<VaultTarget[]>;
   openObsidianVault(path: string): Promise<void>;
+  orchestrateStart(roles: OrchestrateRoles): Promise<{ url: string; token: string } | null>;
+  orchestrateStop(): Promise<void>;
+  approvePlan(): Promise<void>;
+  onOrchestrateEvent(callback: (event: OrchestrateEvent) => void): () => void;
 }

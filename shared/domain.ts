@@ -1,4 +1,5 @@
 import type { AppState, GridItem, LocalProfile, PaneColor, PaneConfig, PaneType, Workspace } from './types';
+import { validateOrchestrate } from './orchestrate';
 
 export const PANE_TYPES: { type: PaneType; label: string }[] = [
   {type:'claude',label:'Claude'}, {type:'powershell',label:'PowerShell'}, {type:'powershell-admin',label:'PowerShell Admin'},
@@ -60,8 +61,8 @@ export function dropTarget(origin: GridItem[], dropped: GridItem): GridItem | un
   return origin.filter(l=>l.i!==dropped.i&&overlap(l)>0).sort((a,b)=>overlap(b)-overlap(a))[0];
 }
 export const PRESETS = [1,4,6,8] as const;
-export function applyPreset(w: Workspace, count: typeof PRESETS[number]): Workspace {
-  const panes=w.panes.slice(0,count); while(panes.length<count)panes.push(createPane('powershell',w.root));
+export function applyPreset(w: Workspace, count: typeof PRESETS[number], pad: PaneType = 'powershell'): Workspace {
+  const panes=w.panes.slice(0,count); while(panes.length<count)panes.push(createPane(pad,w.root));
   return {...w,panes,layout:balancedLayout(panes)};
 }
 
@@ -92,7 +93,8 @@ export function validateWorkspace(value: unknown): Workspace {
     return {i:l.i,x:l.x,y:l.y,w:l.w,h:l.h,minW:3,minH:3};
   });
   if(new Set(layout.map(l=>l.i)).size!==panes.length||layout.length!==panes.length)throw new Error('Layout must contain each pane once');
-  return {id:validateId(w.id),name:string(w.name,'workspace name',100),root:string(w.root,'project directory'),panes,layout,locked:w.locked};
+  const base:Workspace={id:validateId(w.id),name:string(w.name,'workspace name',100),root:string(w.root,'project directory'),panes,layout,locked:w.locked};
+  return w.orchestrate===undefined?base:{...base,orchestrate:validateOrchestrate(w.orchestrate,panes.map(p=>p.id))};
 }
 export function validateState(value: unknown): AppState {
   const s=value as AppState; if(!s||s.version!==1||!Array.isArray(s.workspaces)||s.workspaces.length<1||s.workspaces.length>50||!Array.isArray(s.profiles)||s.profiles.length>50)throw new Error('Unsupported or invalid saved state');
