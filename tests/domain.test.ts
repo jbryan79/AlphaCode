@@ -65,7 +65,13 @@ describe('workspace behavior', () => {
     expect(w.layout).toEqual([{i:w.panes[0].id,x:0,y:0,w:12,h:4,minW:3,minH:3}]);
     const fresh=addPane(removePane(w,w.panes[0].id),createPane('cmd',w.root));
     expect(fresh.layout[0]).toMatchObject({x:0,y:0,w:12});
-    const two=addPane(fresh,createPane('cmd',w.root)); expect(two.layout[1]).toMatchObject({w:6});
+    const two=addPane(fresh,createPane('cmd',w.root)); expect(two.layout[0]).toMatchObject({x:0,y:0,w:6}); expect(two.layout[1]).toMatchObject({x:6,y:0,w:6});
+  });
+  it('a new pane fills the first free half-width slot before starting a new row', () => {
+    let w=defaultState('D:\\Dev\\clauDashole').workspaces[0]; for(const p of w.panes.slice(3)) w=removePane(w,p.id);
+    const three=addPane(w,createPane('cmd',w.root)); expect(three.layout[3]).toMatchObject({x:6,y:4,w:6,h:4});
+    const four=addPane(three,createPane('cmd',w.root)); expect(four.layout[4]).toMatchObject({x:0,y:8,w:6,h:4});
+    const gap=addPane(removePane(four,four.panes[1].id),createPane('cmd',w.root)); expect(gap.layout[4]).toMatchObject({x:6,y:0});
   });
   it('rejects invalid or duplicate IDs and foreign layout references', () => {
     const w=defaultState('D:\\Dev\\clauDashole').workspaces[0];

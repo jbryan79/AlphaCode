@@ -29,9 +29,15 @@ export function moveWorkspace(w: Workspace, root: string): Workspace {
 }
 /** A lone pane owns the whole grid; any other count keeps its layout. */
 export const fillSinglePane = (w: Workspace): Workspace => w.panes.length===1?{...w,layout:balancedLayout(w.panes)}:w;
+const overlaps = (a: GridItem, b: GridItem) => a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;
+/** New panes take the first free half-width slot (left to right, top to bottom) before opening a new row. */
 export function addPane(w: Workspace, p: PaneConfig): Workspace {
-  const y=Math.max(0,...w.layout.map(l=>l.y+l.h));
-  return fillSinglePane({...w,panes:[...w.panes,p],layout:[...w.layout,{i:p.id,x:0,y,w:6,h:4,minW:3,minH:3}]});
+  const panes=[...w.panes,p];
+  if(w.panes.length<=1) return {...w,panes,layout:balancedLayout(panes)};
+  const bottom=Math.max(0,...w.layout.map(l=>l.y+l.h));
+  let slot: GridItem={i:p.id,x:0,y:bottom,w:6,h:4,minW:3,minH:3};
+  search: for(let y=0;y<bottom;y++) for(const x of [0,6]) { const c={...slot,x,y}; if(!w.layout.some(l=>overlaps(l,c))){slot=c;break search;} }
+  return {...w,panes,layout:[...w.layout,slot]};
 }
 export function duplicatePane(w: Workspace, paneId: string): Workspace {
   const pane=w.panes.find(p=>p.id===paneId); if(!pane) return w;
