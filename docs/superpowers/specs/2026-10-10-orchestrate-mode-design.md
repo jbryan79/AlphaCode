@@ -75,8 +75,14 @@ Turning it off closes the control server, deletes the run's hook settings files,
 badges and the Tasks section, and leaves every session running and every worktree on disk.
 The orchestrator pane's next restart runs without the control environment.
 
-The toggle also turns off, with the same cleanup, when the orchestrator pane is closed or
-its session is stopped by the user. Workers keep running.
+The toggle also turns off, with the same cleanup, when the orchestrator pane is closed, its
+type is changed away from Claude, or the workspace is switched. Stopping or restarting the
+orchestrator's session by hand keeps the mode on: the next start reattaches the control
+environment and the playbook, and the tasks survive. Workers keep running either way.
+
+Worker panes belong to the mode while it is on. Starting a task ends whatever session the
+worker pane was running (by default an idle auto-started Claude session) and launches the
+worker in its place. Panes outside the six slots are never touched.
 
 ## What the user sees
 
@@ -217,12 +223,12 @@ the pane is treated as free for the next `task start`.
 
 ## Worker launch
 
-`POST /tasks/:id/start` refuses if the plan is not approved, the task is not Planned,
-Needs attention, Task done or Failed, or the target pane's session is running something
-other than a finished worker. It never kills a session the user may be using.
+`POST /tasks/:id/start` refuses if the plan is not approved, the task is not Planned or
+Task done (Needs attention, Failed and Interrupted go through retry), or the pane is already
+launching.
 
-Otherwise it restarts the worker pane's session through `TerminalManager.start` with the
-pane's existing config plus:
+Otherwise it asks the renderer to restart the worker pane's session, which goes through the
+normal `TerminalManager.start` path with the pane's existing config plus:
 
 | Flag | Value |
 |---|---|
