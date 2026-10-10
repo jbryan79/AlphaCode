@@ -29,6 +29,7 @@ user profile.
    - [Session status labels](#session-status-labels)
    - [Admin PowerShell and UAC](#admin-powershell-and-uac)
    - [Local model panes](#local-model-panes)
+   - [Vault pane](#vault-pane)
    - [Local model profile dialog](#local-model-profile-dialog)
    - [Keyboard](#keyboard)
 5. [Where your data lives](#where-your-data-lives)
@@ -287,6 +288,7 @@ interrupting anything.
 | **PowerShell** | Windows PowerShell 5.1 | Runs with `-NoLogo -NoProfile` unless you supply arguments. |
 | **PowerShell Admin** | Windows PowerShell 5.1, elevated | Requires a UAC approval each time it starts. No overrides, no arguments, no auto-start. See below. |
 | **Local Model** | none | A chat transcript against an Ollama or LM Studio profile. No process is spawned. |
+| **Vault** | none | Talks to the Claude memory vault through a local model profile. Ask questions, or type `launch <project>`. No process is spawned. |
 | **Codex** | `codex` on PATH | OpenAI Codex CLI. |
 | **Gemini** | `gemini` on PATH | Google Gemini CLI. |
 | **WSL** | `wsl.exe` | Your default WSL distribution. |
@@ -355,6 +357,30 @@ A Local Model pane is a chat window, not a terminal.
 - Each pane has its own independent conversation. Conversations are kept in memory only and
   are gone when the app closes or the pane is removed.
 - Requests time out after 120 seconds and responses are capped at 8 MB.
+
+### Vault pane
+
+A Vault pane talks to the [Claude memory vault](#claude-memory-vault) using one of your local
+model profiles, so nothing leaves your machine.
+
+- The **graph** at the top is every note in the vault: discs are notes, colored by memory type,
+  larger discs are projects, lines are links between notes. It drifts gently at rest, pulses
+  while a question is being answered, and lights up the notes an answer came from. Hover a disc
+  to read its name. If Windows is set to reduce motion, the graph is still.
+- **Ask a question** in the composer. AlphaCode picks the notes whose names, descriptions, and
+  text best match your words, sends only those to the model, and shows the answer with a chip
+  for each note it used. Clicking a chip flashes that note in the graph. If nothing matches,
+  the model says so.
+- **Give a launch command**: a message starting with `launch`, `open`, or `start` followed by a
+  name. The name is matched, ignoring case, spaces, and punctuation, against the projects in
+  the vault, the vaults in your Obsidian vault list, and your saved workspaces. A single
+  project match adds a Claude pane in that project's folder and starts it (the pane is saved
+  with auto-start on, like the default Claude panes); a matching Obsidian vault is opened as
+  well. A lone Obsidian match just opens that vault; a lone workspace match loads it. Several
+  matches, or none, are listed instead so nothing opens by guesswork. Commands never go to the
+  model.
+- Conversations are kept in memory only, like Local Model panes. **Clear** empties the
+  transcript.
 
 ### Local model profile dialog
 

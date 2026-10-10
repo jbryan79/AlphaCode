@@ -79,8 +79,14 @@ test('local models, optional pane menu, named workspaces and preset counts',asyn
     await expect(page.locator('.pane[data-pane-title="Local · General"] .chat-transcript')).not.toContainText('Check this independent session');
     expect(requests[0].model).toBe('fixture-coder');expect(requests[0].messages[requests[0].messages.length-1].content).toBe('Check this independent session');
     await page.getByRole('button',{name:'Add pane',exact:true}).click();
-    for(const name of ['Claude','PowerShell','PowerShell Admin','Local Model','Codex','Gemini','WSL','CMD','Git Bash','Custom Command'])await expect(page.locator('.dropdown').getByRole('button',{name,exact:true})).toBeVisible();
-    await page.locator('.dropdown').getByRole('button',{name:'CMD',exact:true}).click();await page.getByLabel('Pane name',{exact:true}).fill('Quick shell');await page.getByRole('button',{name:'Apply changes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(9);
+    for(const name of ['Claude','PowerShell','PowerShell Admin','Local Model','Vault','Codex','Gemini','WSL','CMD','Git Bash','Custom Command'])await expect(page.locator('.dropdown').getByRole('button',{name,exact:true})).toBeVisible();
+    await page.locator('.dropdown').getByRole('button',{name:'Vault',exact:true}).click();await page.getByRole('button',{name:'Apply changes',exact:true}).click();
+    await expect(page.locator('.pane[data-pane-title="Vault"] canvas.vault-graph')).toBeVisible();
+    await expect(page.locator('.pane[data-pane-title="Vault"] .local-welcome')).toContainText(/\d+ notes across \d+ projects/);
+    await page.getByLabel('Message Vault',{exact:true}).fill('launch zzz-no-such-project');await page.getByRole('button',{name:'Send to Vault',exact:true}).click();
+    await expect(page.locator('.pane[data-pane-title="Vault"] .chat-transcript')).toContainText('Nothing in the vault');
+    await page.getByRole('button',{name:'Add pane',exact:true}).click();
+    await page.locator('.dropdown').getByRole('button',{name:'CMD',exact:true}).click();await page.getByLabel('Pane name',{exact:true}).fill('Quick shell');await page.getByRole('button',{name:'Apply changes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(10);
     await page.getByRole('button',{name:'Save as',exact:true}).click();await page.getByLabel('Workspace name',{exact:true}).fill('SQL Day');await page.getByRole('button',{name:'Save workspace',exact:true}).click();
     await expect(page.getByLabel('Load workspace')).toContainText('SQL Day');
     await page.getByRole('button',{name:'4 panes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(4);
@@ -95,7 +101,7 @@ test('local models, optional pane menu, named workspaces and preset counts',asyn
     await expect(page.locator('.app-statusbar')).toContainText('Saved locally');
     const state=await page.evaluate(()=>window.bridge.loadState());
     const sqlDay=state!.workspaces.find(w=>w.name==='SQL Day');if(!sqlDay)throw new Error('Named workspace missing');
-    await page.getByLabel('Load workspace').selectOption(sqlDay.id);await expect(page.locator('.pane')).toHaveCount(9);
+    await page.getByLabel('Load workspace').selectOption(sqlDay.id);await expect(page.locator('.pane')).toHaveCount(10);
     await expect(page.locator('.pane[data-pane-title="PowerShell Admin"] .pane-status')).toHaveText('Ready');
     expect(errors).toEqual([]);
   }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));}
