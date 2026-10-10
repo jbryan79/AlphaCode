@@ -68,16 +68,17 @@ export function validateOrchestrate(value: unknown, paneIds: string[]): Orchestr
   const o = value as Record<string, any>; if (!o || typeof o !== 'object') fail('Invalid orchestrate configuration');
   for (const k of Object.keys(o)) if (!KEYS.includes(k)) fail(`Unknown orchestrate field ${k}`);
   if (!Number.isInteger(o.maxWorkers) || o.maxWorkers < 1 || o.maxWorkers > 5) fail('maxWorkers must be 1 to 5');
-  const orchestratorPaneId = o.orchestratorPaneId ? validateId(o.orchestratorPaneId) : ''; if (orchestratorPaneId && !paneIds.includes(orchestratorPaneId)) fail('Orchestrator pane is not in this workspace');
+  // A closed pane is a normal way to leave the mode: drop what pointed at it instead of rejecting every later save.
+  let orchestratorPaneId = o.orchestratorPaneId ? validateId(o.orchestratorPaneId) : ''; if (orchestratorPaneId && !paneIds.includes(orchestratorPaneId)) orchestratorPaneId = '';
   if (!Array.isArray(o.tasks) || o.tasks.length > 5) fail('tasks must list at most 5 tasks');
   const tasks: Task[] = o.tasks.map((v: any) => {
     if (!v || typeof v !== 'object') fail('Invalid task'); for (const k of Object.keys(v)) if (!TASK_KEYS.includes(k)) fail(k === 'prompt' ? 'Task prompt text is never saved' : `Unknown task field ${k}`);
     if (!TASK_STATES.includes(v.state) || !MODELS.includes(v.model) || !Number.isInteger(v.minutes) || !Number.isInteger(v.retries) || !Array.isArray(v.files)) fail('Invalid task');
-    const paneId = v.paneId ? validateId(v.paneId) : ''; if (paneId && !paneIds.includes(paneId)) fail('Task pane is not in this workspace');
+    const paneId = v.paneId ? validateId(v.paneId) : '';
     const id = str(v.id, 'task id', 32); if (!ID_RE.test(id)) fail(`Task id ${JSON.stringify(id)} must match ^[a-z0-9-]{1,32}$`);
     const state: TaskState = v.state === 'working' || v.state === 'waiting' ? 'interrupted' : v.state;
     return { id, title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, state, paneId, branch: str(v.branch || '', 'branch', 200), worktree: str(v.worktree || '', 'worktree', 32768), startedAt: str(v.startedAt || '', 'startedAt', 40), finishedAt: str(v.finishedAt || '', 'finishedAt', 40), retries: v.retries, sessionId: str(v.sessionId || '', 'sessionId', 64), message: str(v.message || '', 'message', 2000), hidden: v.hidden === true };
-  });
+  }).filter((t: Task) => !t.paneId || paneIds.includes(t.paneId));
   if (new Set(tasks.map(t => t.id)).size !== tasks.length) fail('Duplicate task ids');
   return { on: false, orchestratorPaneId, maxWorkers: o.maxWorkers, approved: o.approved === true, tasks };
 }

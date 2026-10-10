@@ -1,7 +1,7 @@
-// Stand-in for the claude CLI in e2e: honors --worktree and the positional prompt, commits one file, reports done.
-const { execFileSync } = require('node:child_process'); const { writeFileSync, mkdirSync } = require('node:fs'); const { join } = require('node:path');
+// Stand-in for the claude CLI in e2e: honors --worktree and the prompt file named in the positional prompt, commits one file, reports done.
+const { execFileSync } = require('node:child_process'); const { readFileSync, writeFileSync, mkdirSync } = require('node:fs'); const { join } = require('node:path');
 const args = process.argv.slice(2); const flag = n => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : ''; };
-const name = flag('--worktree'), prompt = args[args.length - 1] || '';
+const name = flag('--worktree'), positional = args[args.length - 1] || '', file = /^Read the file (.+) and carry out the task it describes\.$/.exec(positional), prompt = file ? readFileSync(file[1], 'utf8') : positional;
 if (flag('--append-system-prompt-file')) { console.log('ORCHESTRATOR READY'); setInterval(() => {}, 1000); return; } // orchestrator stub idles; the test drives the server through the CLI
 const root = process.cwd(), dir = join(root, '.claude', 'worktrees', name); mkdirSync(join(root, '.claude', 'worktrees'), { recursive: true });
 execFileSync('git', ['worktree', 'add', '-b', `task-${name.replace(/^task-/, '')}`, dir], { cwd: root, stdio: 'ignore' });

@@ -9,13 +9,15 @@ import type { LaunchOverrides } from './terminals';
 export type { LaunchOverrides };
 
 export interface RunDeps { runDir: string; execPath: string; cliPath: string; playbookPath: string; roles: OrchestrateRoles; panes: () => PaneConfig[]; git: (args: string[], cwd: string) => Promise<string>; launch: (paneId: string) => Promise<void>; chat: (paneId: string, prompt: string) => Promise<string>; finish: (report: string, summary: string, run: { tasks: Task[]; plan: Plan | null }) => Promise<void>; emit: (event: OrchestrateEvent) => void; log: (message: string) => void; now?: () => number; }
-interface Live { task: Task; prompt: string; hookToken: string; hooksFile: string; }
+interface Live { task: Task; prompt: string; hookToken: string; hooksFile: string; promptFile?: string; }
 const token = () => randomBytes(32).toString('hex');
 const RING = 4096;
 
 export class OrchestrateRun {
   port = 0; readonly controlToken = token();
-  protected plan: Plan | null = null; protected live = new Map<string, Live>(); protected launching = new Set<string>();
+  protected plan: Plan | null = null; protected live = new Map<string, Live>(); protected launching = new Set<string>(); protected history: Task[] = [];
+  /** Panes whose current session this run launched (cleared on exit); only those get retry feedback typed in. */
+  protected launched = new Set<string>();
   private rings = new Map<string, string>(); private server: Server | null = null; private version = 0; private waiters: (() => void)[] = []; private finished = false;
   constructor(protected deps: RunDeps) {
     // Interrupted tasks from the saved workspace come back without prompt text; retry supplies the next message.
@@ -26,6 +28,9 @@ export class OrchestrateRun {
     await mkdir(this.deps.runDir, { recursive: true });
     // Electron as Node: the shim keeps ELECTRON_RUN_AS_NODE out of the pane environment (terminals.ts strips it) and inside this one process.
     await writeFile(join(this.deps.runDir, 'alphacode.cmd'), `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${this.deps.execPath}" "${this.deps.cliPath}" %*\r\n`, 'utf8');
+    // Claude Code's Bash tool is Git Bash, which does not find a .cmd by bare name: give it an extensionless sh shim too.
+    const posix = (p: string) => p.replace(/\\/g, '/');
+    await writeFile(join(this.deps.runDir, 'alphacode'), `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${posix(this.deps.execPath)}" "${posix(this.deps.cliPath)}" "$@"\n`, 'utf8');
     this.server = createServer((req, res) => void this.handle(req, res).catch(e => this.reply(res, 500, { error: (e as Error).message })));
     await new Promise<void>((resolve, reject) => this.server!.once('error', reject).listen(0, '127.0.0.1', resolve));
     this.port = (this.server.address() as { port: number }).port; return this.port;
@@ -41,12 +46,14 @@ export class OrchestrateRun {
     if (paneId === roles.orchestratorPaneId) return { env: { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_CONTROL_TOKEN: this.controlToken, ALPHACODE_RUN_DIR: this.deps.runDir }, args: ['--append-system-prompt-file', this.deps.playbookPath, '--name', 'Orchestrator'] };
     const l = this.live.get(paneId); if (!l || !this.launching.has(paneId)) return null;
     const env = { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_HOOK_TOKEN: l.hookToken, ALPHACODE_PANE_ID: paneId, ALPHACODE_RUN_DIR_SHIM: this.deps.runDir };
-    if (l.task.retries > 0 && l.task.worktree) return { env, cwd: l.task.worktree, args: ['--resume', l.task.sessionId, '--settings', l.hooksFile, l.prompt] };
-    return { env, args: ['--worktree', `task-${l.task.id}`, '--model', l.task.model, '--name', l.task.title, '--settings', l.hooksFile, '--session-id', l.task.sessionId, promptHeader(l.task) + l.prompt] };
+    const read = `Read the file ${l.promptFile} and carry out the task it describes.`;
+    if (l.task.retries > 0 && l.task.worktree) return { env, cwd: l.task.worktree, args: ['--resume', l.task.sessionId, '--settings', l.hooksFile, read] };
+    return { env, args: ['--worktree', `task-${l.task.id}`, '--model', l.task.model, '--name', l.task.title, '--settings', l.hooksFile, '--session-id', l.task.sessionId, read] };
   }
   tap(paneId: string, data: string): void { const next = (this.rings.get(paneId) || '') + data; this.rings.set(paneId, next.length > RING ? next.slice(-RING) : next); }
   lastLines(paneId: string): string[] { return tail(stripAnsi(this.rings.get(paneId) || ''), 20); }
-  tasks(): Task[] { return [...this.live.values()].map(l => ({ ...l.task })); }
+  /** Live tasks first, then finished tasks whose pane a later plan took, oldest first. */
+  tasks(): Task[] { return [...[...this.live.values()].map(l => l.task), ...this.history].map(t => ({ ...t })); }
   protected reply(res: ServerResponse, status: number, body: unknown): void { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); }
   /** Set by main: type into a worker PTY, and whether its process is alive. Defaults keep tests and a partially wired main honest. */
   writer: (paneId: string, data: string) => void = () => { throw new Error('Retry typing is not wired.'); };
@@ -61,14 +68,14 @@ export class OrchestrateRun {
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url || '/', 'http://127.0.0.1'), route = `${req.method} ${url.pathname}`;
     try {
-      if (route === 'POST /report') { const b = await this.body(req); const paneId = typeof b.paneId === 'string' ? b.paneId : ''; const l = this.live.get(paneId); if (!l || !this.authorized(req, l.hookToken)) return this.reply(res, 401, { error: 'Unauthorized' }); return this.reply(res, 200, { task: this.report(paneId, b) }); }
+      if (route === 'POST /report') { const b = await this.body(req); const paneId = typeof b.paneId === 'string' ? b.paneId : ''; const l = this.live.get(paneId); if (!l || !this.authorized(req, l.hookToken)) return this.reply(res, 401, { error: 'Unauthorized' }); const task = this.report(paneId, b); await this.locate(l); return this.reply(res, 200, { task }); }
       if (!this.authorized(req, this.controlToken)) return this.reply(res, 401, { error: 'Unauthorized' });
       let m: RegExpExecArray | null;
       if (route === 'GET /panes') return this.reply(res, 200, this.panes());
       if (route === 'POST /plan') return this.reply(res, 200, await this.setPlan(await this.body(req)));
-      if (route === 'GET /tasks') return this.reply(res, 200, this.tasks().map(t => this.status(t)));
+      if (route === 'GET /tasks') { await this.locateAll(); return this.reply(res, 200, this.tasks().map(t => this.status(t))); }
       if (route === 'GET /tasks/wait') return this.reply(res, 200, await this.wait(url.searchParams.get('ids') || '', Number(url.searchParams.get('timeout') || 240)));
-      if ((m = /^GET \/tasks\/([a-z0-9-]+)$/.exec(route))) return this.reply(res, 200, this.status(this.find(m[1])));
+      if ((m = /^GET \/tasks\/([a-z0-9-]+)$/.exec(route))) { await this.locateAll(); return this.reply(res, 200, this.status(this.find(m[1], true))); }
       if ((m = /^POST \/tasks\/([a-z0-9-]+)\/start$/.exec(route))) return this.reply(res, 200, await this.startTask(m[1]));
       if ((m = /^POST \/tasks\/([a-z0-9-]+)\/retry$/.exec(route))) return this.reply(res, 200, await this.retry(m[1], await this.body(req)));
       if ((m = /^POST \/ask\/([A-Za-z0-9_-]+)$/.exec(route))) return this.reply(res, 200, await this.ask(m[1], await this.body(req)));
@@ -78,32 +85,42 @@ export class OrchestrateRun {
   }
   private roleOf(id: string): 'orchestrator' | 'worker' | 'advisor' | 'none' { const r = this.deps.roles; return id === r.orchestratorPaneId ? 'orchestrator' : r.workerPaneIds.includes(id) ? 'worker' : r.advisorPaneIds.includes(id) ? 'advisor' : 'none'; }
   private panes() { return this.deps.panes().map(p => { const t = this.live.get(p.id)?.task; return { id: p.id, title: p.title, type: p.type, cwd: p.cwd, role: this.roleOf(p.id), task: t ? { id: t.id, state: t.state } : null }; }); }
-  private find(id: string): Task { const l = [...this.live.values()].find(x => x.task.id === id); if (!l) this.err(404, `No task ${id}`); return l.task; }
+  private find(id: string, withHistory = false): Task { const t = [...this.live.values()].find(x => x.task.id === id)?.task || (withHistory ? this.history.find(x => x.id === id) : undefined); if (!t) this.err(404, `No task ${id}`); return t; }
   private status(t: Task) { return { ...t, elapsedSeconds: t.startedAt ? Math.round(((t.finishedAt ? Date.parse(t.finishedAt) : this.now()) - Date.parse(t.startedAt)) / 1000) : 0, lines: this.lastLines(t.paneId) }; }
   private async setPlan(body: unknown): Promise<Omit<Plan, 'tasks'> & { tasks: Task[] }> {
     const { roles } = this.deps; const workers = roles.workerPaneIds.filter(id => this.deps.panes().some(p => p.id === id && p.type === 'claude'));
     const plan = validatePlan(body, { maxWorkers: roles.maxWorkers, workerPanes: workers.length });
     try { await this.deps.git(['rev-parse', '--is-inside-work-tree'], roles.root); } catch { this.err(400, `${roles.root} is not a git repository; Orchestrate needs one for worktrees`); }
     if ((await this.deps.git(['status', '--porcelain'], roles.root)).split(/\r?\n/).some(l => l && !l.startsWith('??'))) this.err(400, 'The git index is not clean; commit or stash before planning');
-    const kept = new Map([...this.live.entries()].filter(([, l]) => l.task.state !== 'planned'));
-    const free = workers.filter(id => !kept.has(id));
-    for (const pt of plan.tasks) { if ([...kept.values()].some(l => l.task.id === pt.id)) continue; const paneId = free.shift(); if (!paneId) this.err(409, 'No free worker pane for the plan'); const { prompt, ...rest } = pt; const task: Task = { ...rest, state: 'planned', paneId, branch: '', worktree: '', startedAt: '', finishedAt: '', retries: 0, sessionId: '', message: '', hidden: false }; kept.set(paneId, this.mintTask(task, prompt)); }
-    this.live = kept; this.plan = { ...plan, approved: plan.approved || this.plan?.approved === true }; this.bump();
+    // Planned tasks are replaced; a Task done pane is free again and its task moves to history; any other state keeps its pane.
+    const kept = new Map([...this.live.entries()].filter(([, l]) => l.task.state !== 'planned')), used = new Set([...kept.values()].map(l => l.task.id).concat(this.history.map(t => t.id)));
+    const reused = plan.tasks.find(pt => used.has(pt.id)); if (reused) this.err(409, `Task id ${reused.id} is already used in this run; pick a new id`);
+    const added = plan.tasks.some(pt => ![...this.live.values()].some(l => l.task.id === pt.id)), free = workers.filter(id => !kept.has(id) || kept.get(id)!.task.state === 'done'), displaced: Task[] = [];
+    for (const pt of plan.tasks) { const paneId = free.shift(); if (!paneId) this.err(409, 'No free worker pane for the plan'); const old = kept.get(paneId); if (old) displaced.push(old.task); const { prompt, ...rest } = pt; const task: Task = { ...rest, state: 'planned', paneId, branch: '', worktree: '', startedAt: '', finishedAt: '', retries: 0, sessionId: '', message: '', hidden: false }; kept.set(paneId, this.mintTask(task, prompt)); }
+    // A plan with new tasks is a new request: it needs its own "go" and may finish again.
+    this.live = kept; this.history.push(...displaced); this.plan = { ...plan, approved: plan.approved || (!added && this.plan?.approved === true) }; if (added) this.finished = false; this.bump();
     return { ...this.plan, tasks: this.tasks() };
   }
   private async launchPane(l: Live, signal: Signal): Promise<Task> {
     const id = l.task.paneId; if (this.launching.has(id)) this.err(409, `Pane ${id} is already launching`);
     if (!transition(l.task.state, signal)) this.err(409, `Task ${l.task.id} is ${l.task.state}`);
     this.launching.add(id);
-    try { await writeFile(l.hooksFile, this.hooksJson(), 'utf8'); await this.deps.launch(id); this.signal(id, signal); } catch (error) { this.launching.delete(id); l.task.state = 'failed'; l.task.message = (error as Error).message; this.bump(); throw error; }
+    // The prompt travels as a file: argv through claude.cmd and cmd.exe truncates at a newline and caps at 32,767 characters.
+    l.promptFile = join(this.deps.runDir, signal === 'start' ? `task-${l.task.id}.md` : `task-${l.task.id}-retry-${l.task.retries}.md`);
+    try { await writeFile(l.hooksFile, this.hooksJson(), 'utf8'); await writeFile(l.promptFile, signal === 'start' ? promptHeader(l.task) + l.prompt : l.prompt, 'utf8'); await this.deps.launch(id); this.launched.add(id); this.signal(id, signal); }
+    // A failed first launch goes back to Planned so `task start` can try again; a failed resume stays Failed for retry.
+    catch (error) { this.launching.delete(id); l.task.state = signal === 'start' ? 'planned' : 'failed'; l.task.message = (error as Error).message; this.bump(); throw error; }
     this.launching.delete(id); await this.locate(l); return l.task;
   }
+  /** Claude creates the worktree a second or more after spawn, so this runs again (launch, report, status, retry) until it matches. */
   private async locate(l: Live): Promise<void> {
+    if (l.task.worktree || l.task.state === 'planned') return;
     try { const out = await this.deps.git(['worktree', 'list', '--porcelain'], this.deps.roles.root); const want = `/task-${l.task.id}`; let path = '';
-      for (const line of out.split(/\r?\n/)) { if (line.startsWith('worktree ')) path = line.slice(9).replace(/\\/g, '/'); else if (line.startsWith('branch ') && path.endsWith(want)) { l.task.worktree = path; l.task.branch = line.slice(7).replace(/^refs\/heads\//, ''); break; } }
+      for (const line of out.split(/\r?\n/)) { if (line.startsWith('worktree ')) path = line.slice(9).replace(/\\/g, '/'); else if (line.startsWith('branch ') && path.endsWith(want)) { l.task.worktree = path; l.task.branch = line.slice(7).replace(/^refs\/heads\//, ''); this.bump(); return; } }
+      this.deps.log(`worktree lookup: no worktree for task-${l.task.id} yet`);
     } catch (error) { this.deps.log(`worktree lookup: ${(error as Error).message}`); }
-    this.bump();
   }
+  private async locateAll(): Promise<void> { await Promise.all([...this.live.values()].map(l => this.locate(l))); }
   private async startTask(id: string): Promise<Task> {
     const t = this.find(id); const l = this.live.get(t.paneId)!; if (!this.plan?.approved) this.err(409, 'The plan is not approved yet');
     if (t.state === 'attention' || t.state === 'failed' || t.state === 'interrupted') this.err(409, `Task ${id} is ${t.state}; use retry`);
@@ -114,9 +131,12 @@ export class OrchestrateRun {
   private async retry(id: string, body: any): Promise<Task> {
     const t = this.find(id); const l = this.live.get(t.paneId)!; const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : ''; if (!feedback || feedback.length > 65536) this.err(400, 'feedback is required (1 to 65536 characters)');
     if (!transition(t.state, 'retry')) this.err(409, `Task ${id} is ${t.state}`); if (t.retries >= 2) this.err(409, `Task ${id} already retried twice`);
-    const alive = this.alive(t.paneId);
+    await this.locate(l);
+    // Only type into a session this run launched; after an app restart the pane may hold an unrelated idle Claude session.
+    const alive = this.launched.has(t.paneId) && this.alive(t.paneId);
     if (!alive) { if (!t.sessionId || !t.worktree) this.err(409, `Task ${id} has no session to resume`); if (this.launching.has(t.paneId)) this.err(409, `Pane ${t.paneId} is already launching`); }
-    if (alive) this.writer(t.paneId, feedback.replace(/[\r\n]+/g, ' ').replace(/[\x00-\x1f\x7f]/g, '') + '\r');
+    // Enter goes in a separate write: text and CR in one chunk can read as a paste, leaving the CR as a newline that never submits.
+    if (alive) { const paneId = t.paneId; this.writer(paneId, feedback.replace(/[\r\n]+/g, ' ').replace(/[\x00-\x1f\x7f]/g, '')); setTimeout(() => { try { this.writer(paneId, '\r'); } catch (error) { this.deps.log(`retry enter: ${(error as Error).message}`); } }, 100); }
     t.retries++; t.message = ''; t.finishedAt = '';
     if (alive) { this.signal(t.paneId, 'retry'); return t; }
     l.prompt = feedback; return this.launchPane(l, 'retry');
@@ -128,7 +148,7 @@ export class OrchestrateRun {
     this.err(400, 'kind must be done, failed, stop or waiting');
   }
   private wait(ids: string, timeout: number): Promise<{ changed: boolean; tasks: Task[] }> {
-    const want = ids ? ids.split(',').map(s => s.trim()).filter(Boolean) : this.tasks().map(t => t.id); for (const id of want) this.find(id);
+    const want = ids ? ids.split(',').map(s => s.trim()).filter(Boolean) : this.tasks().map(t => t.id); for (const id of want) this.find(id, true);
     const pick = () => this.tasks().filter(t => want.includes(t.id)); const snapshot = JSON.stringify(pick().map(t => [t.id, t.state, t.retries])); const ms = Math.max(0, Math.min(240, Number.isFinite(timeout) ? timeout : 240)) * 1000;
     return new Promise(resolve => {
       const changed = () => JSON.stringify(pick().map(t => [t.id, t.state, t.retries])) !== snapshot;
@@ -149,7 +169,7 @@ export class OrchestrateRun {
   }
   protected signal(paneId: string, signal: Signal, message = ''): Task | null { const l = this.live.get(paneId); if (!l) return null; const next = transition(l.task.state, signal); if (!next) return null; l.task.state = next; if (message) l.task.message = message; if (next === 'done' || next === 'failed') l.task.finishedAt = new Date(this.now()).toISOString(); if (next === 'working') l.task.hidden = false; this.bump(); return l.task; }
   protected bump(): void { this.version++; for (const w of this.waiters.splice(0)) w(); this.deps.emit({ kind: 'tasks', approved: this.plan?.approved === true, tasks: this.tasks() }); }
-  exited(paneId: string): void { this.signal(paneId, 'exit', 'Process exited without a report.'); }
+  exited(paneId: string): void { this.launched.delete(paneId); this.signal(paneId, 'exit', 'Process exited without a report.'); }
   typed(paneId: string): void { const l = this.live.get(paneId); if (!l) return; if (l.task.state === 'done' || l.task.state === 'failed') { if (!l.task.hidden) { l.task.hidden = true; this.bump(); } return; } this.signal(paneId, 'typed'); }
   approve(): void { if (this.plan) { this.plan.approved = true; this.bump(); } }
   protected authorized(req: IncomingMessage, expected: string): boolean { const got = (req.headers.authorization || '').replace(/^Bearer\s+/i, ''); return got.length === expected.length && timingSafeEqual(Buffer.from(got), Buffer.from(expected)); }

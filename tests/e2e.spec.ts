@@ -157,6 +157,7 @@ test('orchestrate mode runs a two-task plan through stub workers', async () => {
   cli('task', 'start', 'a'); cli('task', 'start', 'b');
   await expect(page.locator('.pane-badge', { hasText: 'Task done' })).toHaveCount(2);
   expect(execFileSync('git', ['worktree', 'list'], { cwd: repo, encoding: 'utf8' })).toContain('task-a');
+  expect(await readFile(join(repo, '.claude', 'worktrees', 'task-a', 'task-a.txt'), 'utf8')).toMatch(/^Task a in worktree task-a[\s\S]*A task$/); // prompt arrived through the file
   await expect(page.locator('.app-statusbar')).toContainText('2 done');
   await writeFile(join(dir, 'r.md'), 'E2E finished.'); cli('finish', join(dir, 'r.md'));
   await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-badge')).toHaveText('Done');

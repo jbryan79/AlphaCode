@@ -33,7 +33,8 @@ export default function App() {
     Promise.all([window.bridge.loadState(),window.bridge.appInfo()]).then(([saved,info])=>{setStatePath(info.statePath);const loaded=saved||defaultState(info.root),next={...loaded,workspaces:loaded.workspaces.map(fillSinglePane)};setState(next);setOrch({approved:false,tasks:next.workspaces.find(w=>w.id===next.activeWorkspaceId)?.orchestrate?.tasks||[],finished:''});setFocused(next.workspaces.find(w=>w.id===next.activeWorkspaceId)?.panes[0]?.id||'');}).catch(e=>report(`Saved workspace could not load: ${e}`));
     const offSession=window.bridge.onSessionEvent(e=>{if(e.kind==='status')setStatuses(previous=>({...previous,[e.paneId]:e}));});
     const offOrch=window.bridge.onOrchestrateEvent(e=>{
-      if(e.kind==='tasks'){setOrch(o=>({...o,approved:e.approved,tasks:e.tasks}));update(w=>({...w,orchestrate:{...(w.orchestrate||emptyOrchestrate()),approved:e.approved,tasks:e.tasks}}));}
+      // Live tasks come first (at most 5 worker panes); history beyond that stays in the sidebar but is not saved.
+      if(e.kind==='tasks'){setOrch(o=>({...o,approved:e.approved,tasks:e.tasks,finished:''}));update(w=>({...w,orchestrate:{...(w.orchestrate||emptyOrchestrate()),approved:e.approved,tasks:e.tasks.slice(0,5)}}));}
       else if(e.kind==='launch'){void window.bridge.stopSession(e.paneId).then(()=>setRelaunch(r=>({...r,[e.paneId]:(r[e.paneId]||0)+1}))).catch(err=>report(String(err)));}
       else if(e.kind==='finished'){setOrch(o=>({...o,finished:e.summary}));setNotice(`Orchestrator finished: ${e.summary}`);}
       else if(e.kind==='error')report(e.message);
@@ -100,8 +101,9 @@ export default function App() {
     const focusedClaude=w.panes.find(p=>p.id===focused&&p.type==='claude'),first=w.panes.find(p=>p.type==='claude');
     const orchestrator=focusedClaude||first; if(!orchestrator){report('Orchestrate needs a Claude pane.');return;}
     if(isActive(orchestrator.id)&&!window.confirm(`${orchestrator.title} becomes the orchestrator. Its session restarts with the control channel. Continue?`))return;
-    const resume=orchestrate.tasks.filter(t=>t.state==='interrupted');
-    const roles:OrchestrateRoles={workspaceId:w.id,root:orchestrator.cwd,orchestratorPaneId:orchestrator.id,workerPaneIds:w.panes.filter(p=>p.type==='claude'&&p.id!==orchestrator.id).map(p=>p.id),advisorPaneIds:w.panes.filter(p=>p.type==='local-model').map(p=>p.id),maxWorkers:orchestrate.maxWorkers,resume};
+    const workerPaneIds=w.panes.filter(p=>p.type==='claude'&&p.id!==orchestrator.id).map(p=>p.id);
+    const resume=orchestrate.tasks.filter(t=>t.state==='interrupted'&&workerPaneIds.includes(t.paneId));
+    const roles:OrchestrateRoles={workspaceId:w.id,root:orchestrator.cwd,orchestratorPaneId:orchestrator.id,workerPaneIds,advisorPaneIds:w.panes.filter(p=>p.type==='local-model').map(p=>p.id),maxWorkers:orchestrate.maxWorkers,resume};
     try{await Promise.all(removed.map(async p=>{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);}));
       const testEnv=await window.bridge.orchestrateStart(roles);started=true;if(testEnv)(window as any).__orchestrateEnv={ALPHACODE_CONTROL_URL:testEnv.url,ALPHACODE_CONTROL_TOKEN:testEnv.token};
       setState(s=>s?{...s,workspaces:s.workspaces.map(x=>x.id===w.id?{...x,panes:w.panes,layout:w.layout,orchestrate:{...(x.orchestrate||emptyOrchestrate()),on:true,orchestratorPaneId:orchestrator.id,approved:false,tasks:resume}}:x)}:s);setMaximized('');setOrch({approved:false,tasks:resume,finished:''});

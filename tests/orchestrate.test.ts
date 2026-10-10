@@ -74,9 +74,13 @@ describe('persistence', () => {
     const v = validateWorkspace({ ...ws, orchestrate: { on: true, orchestratorPaneId: 'p1', maxWorkers: 3, approved: true, tasks: [task({ state: 'working', paneId: 'p1' }), task({ id: 'b', state: 'done', paneId: 'p1' })] } });
     expect(v.orchestrate?.on).toBe(false); expect(v.orchestrate?.tasks.map(x => x.state)).toEqual(['interrupted', 'done']);
   });
-  it('rejects tokens, unknown panes, bad counts and prompt text', () => {
+  it('drops a closed orchestrator pane and tasks on closed panes instead of rejecting the save', () => {
+    const v = validateWorkspace({ ...ws, orchestrate: { on: false, orchestratorPaneId: 'gone', maxWorkers: 3, approved: false, tasks: [task({ id: 'kept', state: 'done', paneId: 'p1' }), task({ id: 'lost', state: 'interrupted', paneId: 'p9' })] } });
+    expect(v.orchestrate?.orchestratorPaneId).toBe(''); expect(v.orchestrate?.tasks.map(x => x.id)).toEqual(['kept']);
+    expect(() => validateOrchestrate({ ...emptyOrchestrate(), orchestratorPaneId: '../x' }, ['p1'])).toThrow(); // malformed ids still rejected
+  });
+  it('rejects tokens, bad counts and prompt text', () => {
     expect(() => validateOrchestrate({ ...emptyOrchestrate(), maxWorkers: 9 }, ['p1'])).toThrow(/maxWorkers/);
-    expect(() => validateOrchestrate({ ...emptyOrchestrate(), orchestratorPaneId: 'zz' }, ['p1'])).toThrow(/pane/);
     expect(() => validateOrchestrate({ ...emptyOrchestrate(), tasks: [{ ...task(), prompt: 'secret' }] }, ['p2'])).toThrow(/prompt/);
     expect(() => validateOrchestrate({ ...emptyOrchestrate(), token: 'x' }, ['p1'])).toThrow(/unknown/i);
   });
@@ -124,6 +128,8 @@ describe('OrchestrateRun launch overrides', () => {
     expect(f.run.overrides('p4')).toBeNull(); expect(f.run.overrides('p2')).toBeNull(); // idle worker gets nothing
     const shim = await readFile(join(f.runDir, 'alphacode.cmd'), 'utf8');
     expect(shim).toContain('ELECTRON_RUN_AS_NODE=1'); expect(shim).toContain('"C:\\App\\AlphaCode.exe" "C:\\App\\dist-electron\\electron\\cli.js" %*');
+    const sh = await readFile(join(f.runDir, 'alphacode'), 'utf8'); // Git Bash (Claude's Bash tool) finds this one by bare name
+    expect(sh).toBe('#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "C:/App/AlphaCode.exe" "C:/App/dist-electron/electron/cli.js" "$@"\n'); expect(sh).not.toContain('\r');
     await f.run.stop(); await expect(stat(f.runDir)).rejects.toThrow();
   });
   it('seeds interrupted tasks from the saved workspace so the new run can list and retry them', async () => {
@@ -194,11 +200,14 @@ describe('control server', () => {
     const sid = f.run.tasks()[0].sessionId; expect(sid).not.toBe('');
     expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409); expect(f.run.tasks()[0].sessionId).toBe(sid);
     const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2')); expect(o.env!.ALPHACODE_RUN_DIR_SHIM).toBe(f.runDir);
+    const file = join(f.runDir, 'task-api.md'); expect(o.args!.at(-1)).toBe(`Read the file ${file} and carry out the task it describes.`); // the prompt travels as a file, not argv
+    expect(await readFile(file, 'utf8')).toBe(promptHeader(f.run.tasks()[0]) + 'Build the endpoint.');
     release(); expect((await first).status).toBe(200);
-    const bad = await fixture({ launch: async () => { throw new Error('Cannot find claude'); } });
+    let fails = 1; const bad = await fixture({ launch: async () => { if (fails-- > 0) throw new Error('Cannot find claude'); } });
     await call(bad.run, bad.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
     const r = await call(bad.run, bad.run.controlToken, 'POST', '/tasks/api/start');
-    expect(r.status).toBe(500); expect(bad.run.tasks()[0]).toMatchObject({ state: 'failed', message: 'Cannot find claude' });
+    expect(r.status).toBe(500); expect(bad.run.tasks()[0]).toMatchObject({ state: 'planned', message: 'Cannot find claude' }); // not a dead end
+    expect((await call(bad.run, bad.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(200); expect(bad.run.tasks()[0]).toMatchObject({ state: 'working', message: '' });
     await f.run.stop(); await bad.run.stop();
   });
   it('applies hook reports, ignores repeats, and reports status with the last lines', async () => {
@@ -242,10 +251,14 @@ describe('control server', () => {
     expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/retry', { feedback: 'fix tests' })).status).toBe(409); // working
     await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
     expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/retry', { feedback: 'fix tests' })).status).toBe(200);
-    expect(typed).toEqual(['p2:fix tests\r']); expect(f.run.tasks()[0]).toMatchObject({ state: 'working', retries: 1 });
+    expect(typed).toEqual(['p2:fix tests']); expect(f.run.tasks()[0]).toMatchObject({ state: 'working', retries: 1 });
+    await new Promise(r => setTimeout(r, 150)); expect(typed).toEqual(['p2:fix tests', 'p2:\r']); // Enter is its own write so it submits, not pastes
     f.run.alive = () => false; f.run.exited('p2');
+    const seen: any[] = []; const inner = f.deps.launch; f.deps.launch = async id => { seen.push(f.run.overrides(id)); return inner(id); };
     expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/retry', { feedback: 'again' })).status).toBe(200);
     expect(f.launches).toEqual(['p2', 'p2']); expect(f.run.tasks()[0].retries).toBe(2);
+    const retryFile = join(f.runDir, 'task-api-retry-2.md'); expect(seen[0].args.slice(0, 2)).toEqual(['--resume', f.run.tasks()[0].sessionId]);
+    expect(seen[0].args.at(-1)).toBe(`Read the file ${retryFile} and carry out the task it describes.`); expect(await readFile(retryFile, 'utf8')).toBe('again');
     f.run.exited('p2'); expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/retry', { feedback: 'third' })).status).toBe(409); // cap of two
     await f.run.stop();
   });
@@ -273,28 +286,28 @@ describe('control server fixes', () => {
     await f.run.stop();
   });
   it('retry guards run before mutating and typed feedback is sanitized', async () => {
-    const typed: string[] = []; const f = await fixture(); f.run.writer = (_id, d) => { typed.push(d); }; f.run.alive = () => false;
+    const typed: string[] = []; const f = await fixture({ git: async args => args[0] === 'status' ? '' : args[0] === 'worktree' ? 'worktree D:/Dev/repo\nbranch refs/heads/main\n' : 'true\n' });
+    f.run.writer = (_id, d) => { typed.push(d); }; f.run.alive = () => false;
     await call(f.run, C(f), 'POST', '/plan', { ...planBody, approved: true });
     await call(f.run, C(f), 'POST', '/tasks/api/start');
     f.run.exited('p2');
-    const live = (f.run as any).live.get('p2'); live.task.worktree = '';
+    const live = (f.run as any).live.get('p2'); expect(live.task.worktree).toBe('');
     const r = await call(f.run, C(f), 'POST', '/tasks/api/retry', { feedback: 'x' });
-    expect(r.status).toBe(409); expect(f.run.tasks()[0].retries).toBe(0);
-    live.task.state = 'attention'; f.run.alive = () => true;
+    expect(r.status).toBe(409); expect(r.body.error).toMatch(/no session to resume/); expect(f.run.tasks()[0].retries).toBe(0);
+    live.task.state = 'attention'; f.run.alive = () => true; (f.run as any).launched.add('p2');
     expect((await call(f.run, C(f), 'POST', '/tasks/api/retry', { feedback: 'a\rb\x1b[Ac\n' })).status).toBe(200);
-    expect(typed).toEqual(['a b[Ac\r']);
+    expect(typed).toEqual(['a b[Ac']);
     await f.run.stop();
   });
   it('a plan that runs out of panes leaves the previous state intact', async () => {
     const f = await fixture();
     await call(f.run, C(f), 'POST', '/plan', { ...planBody, approved: true });
-    await call(f.run, C(f), 'POST', '/tasks/api/start'); // ui stays planned, so p3 is the only free pane
-    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    await call(f.run, C(f), 'POST', '/tasks/api/start'); // api keeps working on p2; ui stays planned, so p3 is the only free pane
     const before = f.run.tasks();
     const t = (id: string) => ({ ...planBody.tasks[0], id, files: [`src/${id}/`] });
     const r = await call(f.run, C(f), 'POST', '/plan', { tests: 'npm test', tasks: [t('n1'), t('n2')] });
     expect(r.status).toBe(409); expect(r.body.error).toMatch(/No free worker pane/);
-    expect(f.run.tasks()).toEqual(before); expect(before.map(x => [x.id, x.state])).toEqual([['api', 'done'], ['ui', 'planned']]);
+    expect(f.run.tasks()).toEqual(before); expect(before.map(x => [x.id, x.state])).toEqual([['api', 'working'], ['ui', 'planned']]);
     await f.run.stop();
   });
   it('finish skips heading lines for the summary', async () => {
@@ -310,6 +323,58 @@ describe('concurrent launch', () => {
     const both = Promise.all([call(f.run, f.run.controlToken, 'POST', '/tasks/api/start'), call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')]);
     await new Promise(r => setTimeout(r, 100)); release();
     expect((await both).map(r => r.status).sort()).toEqual([200, 409]); expect(n).toBe(1);
+    await f.run.stop();
+  });
+});
+
+describe('final review fixes', () => {
+  const C = (f: Awaited<ReturnType<typeof fixture>>) => f.run.controlToken;
+  const real = 'worktree D:/Dev/repo\nbranch refs/heads/main\n\nworktree D:/Dev/repo/.claude/worktrees/task-api\nbranch refs/heads/worktree-task-api\n\n';
+  it('finds the worktree and branch Claude creates after spawn, on a later report or status call', async () => {
+    let created = false; const logs: string[] = [];
+    const f = await fixture({ log: m => logs.push(m), git: async args => args[0] === 'status' ? '' : args[0] === 'worktree' ? (created ? real : 'worktree D:/Dev/repo\nbranch refs/heads/main\n') : 'true\n' });
+    await call(f.run, C(f), 'POST', '/plan', { ...planBody, approved: true });
+    await call(f.run, C(f), 'POST', '/tasks/api/start');
+    expect(f.run.tasks()[0]).toMatchObject({ state: 'working', branch: '', worktree: '' }); expect(logs.some(l => /no worktree for task-api/.test(l))).toBe(true);
+    created = true;
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'stop' });
+    expect(f.run.tasks()[0]).toMatchObject({ state: 'attention', branch: 'worktree-task-api', worktree: 'D:/Dev/repo/.claude/worktrees/task-api' });
+    const g = await fixture({ git: async args => args[0] === 'status' ? '' : args[0] === 'worktree' ? (created ? real : '') : 'true\n' }); created = false;
+    await call(g.run, C(g), 'POST', '/plan', { ...planBody, approved: true }); await call(g.run, C(g), 'POST', '/tasks/api/start');
+    expect(g.run.tasks()[0].branch).toBe(''); created = true;
+    expect((await call(g.run, C(g), 'GET', '/tasks/api')).body).toMatchObject({ branch: 'worktree-task-api' });
+    await f.run.stop(); await g.run.stop();
+  });
+  it('relaunches with resume instead of typing into a session this run did not launch', async () => {
+    const typed: string[] = [];
+    const interrupted = task({ id: 'old', state: 'interrupted', paneId: 'p3', sessionId: 'abc', worktree: 'D:/Dev/repo/.claude/worktrees/task-old', branch: 'worktree-task-old' });
+    const f = await fixture({ roles: { workspaceId: 'w', root: 'D:\\Dev\\repo', orchestratorPaneId: 'p1', workerPaneIds: ['p2', 'p3'], advisorPaneIds: ['p4'], maxWorkers: 5, resume: [interrupted] } });
+    f.run.writer = (_id, d) => { typed.push(d); }; f.run.alive = () => true; // an idle Claude auto-started after an app restart
+    expect((await call(f.run, C(f), 'POST', '/tasks/old/retry', { feedback: 'carry on' })).status).toBe(200);
+    expect(f.launches).toEqual(['p3']); expect(typed).toEqual([]); expect(f.run.tasks()[0]).toMatchObject({ state: 'working', retries: 1 });
+    await f.run.stop();
+  });
+  it('gives a Task done pane to the next plan, keeps the done task listed, and refuses a reused id', async () => {
+    const f = await fixture();
+    await call(f.run, C(f), 'POST', '/plan', { tests: '', approved: true, tasks: [planBody.tasks[0]] });
+    await call(f.run, C(f), 'POST', '/tasks/api/start'); await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    expect((await call(f.run, C(f), 'POST', '/plan', { tests: '', tasks: [{ ...planBody.tasks[0], prompt: 'again' }] })).status).toBe(409);
+    const next = (id: string) => ({ ...planBody.tasks[1], id, files: [`src/${id}/`] });
+    const r = await call(f.run, C(f), 'POST', '/plan', { tests: '', tasks: [next('n1'), next('n2')] });
+    expect(r.status).toBe(200); expect(f.run.tasks().map(t => [t.id, t.paneId, t.state])).toEqual([['n1', 'p2', 'planned'], ['n2', 'p3', 'planned'], ['api', 'p2', 'done']]);
+    expect((await call(f.run, C(f), 'GET', '/tasks/api')).body.state).toBe('done');
+    expect((await call(f.run, C(f), 'POST', '/plan', { tests: '', tasks: [next('api')] })).status).toBe(409); // id in history
+    await f.run.stop();
+  });
+  it('a new plan after finish needs its own approval and may finish again', async () => {
+    const f = await fixture();
+    await call(f.run, C(f), 'POST', '/plan', { tests: '', approved: true, tasks: [planBody.tasks[0]] });
+    await call(f.run, C(f), 'POST', '/tasks/api/start'); await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    expect((await call(f.run, C(f), 'POST', '/finish', { report: 'First.' })).status).toBe(200);
+    expect((await call(f.run, C(f), 'POST', '/plan', { tests: '', tasks: [planBody.tasks[1]] })).body.approved).toBe(false);
+    expect(f.events.at(-1)).toMatchObject({ kind: 'tasks', approved: false });
+    expect((await call(f.run, C(f), 'POST', '/tasks/ui/start')).status).toBe(409);
+    expect((await call(f.run, C(f), 'POST', '/finish', { report: 'Second.' })).status).toBe(200);
     await f.run.stop();
   });
 });

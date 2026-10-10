@@ -85,7 +85,7 @@ function registerIpc():void{
   handle('bridge:open-obsidian-vault',async(path:string)=>{await shell.openExternal(await vault.obsidianUrl(path));});
   handle('bridge:orchestrate-start',async(value:OrchestrateRoles)=>{
     const workerPaneIds=(value.workerPaneIds||[]).slice(0,5).map(validateId);
-    const resume=validateOrchestrate({...emptyOrchestrate(),tasks:Array.isArray(value.resume)?value.resume.slice(0,5):[]},workerPaneIds).tasks.filter(t=>t.state==='interrupted');
+    const resume=validateOrchestrate({...emptyOrchestrate(),tasks:Array.isArray(value.resume)?value.resume.filter(t=>workerPaneIds.includes(t?.paneId)).slice(0,5):[]},workerPaneIds).tasks.filter(t=>t.state==='interrupted');
     const roles:OrchestrateRoles={workspaceId:validateId(value.workspaceId),root:str(value.root,'project directory'),orchestratorPaneId:validateId(value.orchestratorPaneId),workerPaneIds,advisorPaneIds:(value.advisorPaneIds||[]).slice(0,5).map(validateId),maxWorkers:Math.min(5,Math.max(1,Number(value.maxWorkers)||5)),resume};
     const playbookPath=join(app.getPath('userData'),'orchestrate.md');if(!existsSync(playbookPath))await copyFile(join(app.getAppPath(),'public','orchestrate.md'),playbookPath);
     const prev=run;run=null;await prev?.stop().catch(()=>{});
