@@ -94,8 +94,8 @@ export class OrchestrateRun {
   private async launchPane(l: Live, signal: Signal): Promise<Task> {
     const id = l.task.paneId; if (this.launching.has(id)) this.err(409, `Pane ${id} is already launching`);
     if (!transition(l.task.state, signal)) this.err(409, `Task ${l.task.id} is ${l.task.state}`);
-    await writeFile(l.hooksFile, this.hooksJson(), 'utf8'); this.launching.add(id);
-    try { await this.deps.launch(id); this.signal(id, signal); } catch (error) { this.launching.delete(id); l.task.state = 'failed'; l.task.message = (error as Error).message; this.bump(); throw error; }
+    this.launching.add(id);
+    try { await writeFile(l.hooksFile, this.hooksJson(), 'utf8'); await this.deps.launch(id); this.signal(id, signal); } catch (error) { this.launching.delete(id); l.task.state = 'failed'; l.task.message = (error as Error).message; this.bump(); throw error; }
     this.launching.delete(id); await this.locate(l); return l.task;
   }
   private async locate(l: Live): Promise<void> {

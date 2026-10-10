@@ -302,3 +302,13 @@ describe('control server fixes', () => {
     await f.run.stop();
   });
 });
+describe('concurrent launch', () => {
+  it('lets exactly one of two simultaneous starts launch', async () => {
+    let release = () => {}; const f = await fixture({ launch: () => new Promise<void>(r => { release = r; }) }); let n = 0; const inner = f.deps.launch; f.deps.launch = (id: string) => { n++; return inner(id); };
+    await call(f.run, f.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
+    const both = Promise.all([call(f.run, f.run.controlToken, 'POST', '/tasks/api/start'), call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')]);
+    await new Promise(r => setTimeout(r, 100)); release();
+    expect((await both).map(r => r.status).sort()).toEqual([200, 409]); expect(n).toBe(1);
+    await f.run.stop();
+  });
+});
