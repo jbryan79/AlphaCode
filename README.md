@@ -22,6 +22,7 @@ user profile.
    - [Sidebar: Panes](#sidebar-panes)
    - [Grid bar](#grid-bar)
    - [Sidebar: Local model profiles](#sidebar-local-model-profiles)
+   - [Sidebar: Claude memory](#sidebar-claude-memory)
    - [Pane header and footer](#pane-header-and-footer)
    - [Configure pane dialog](#configure-pane-dialog)
    - [Pane types](#pane-types)
@@ -194,6 +195,19 @@ button to add one. See [Local model profile dialog](#local-model-profile-dialog)
 
 Hover **Saved locally** in the status bar to see the path of the file where everything is
 saved.
+
+### Sidebar: Claude memory
+
+Claude Code keeps a small memory for every project it works in: Markdown notes it writes on
+its own as it learns your preferences and your projects. AlphaCode gathers all of those folders
+into one Obsidian vault so you can read, search, and graph everything Claude remembers. The
+section shows how many projects and notes the vault holds and where it lives.
+
+**Open in Obsidian** opens the vault in Obsidian. The first time, Obsidian asks whether to open
+the folder as a vault; say yes and it stays in your vault list. If Obsidian is not installed the
+button reads **Get Obsidian** and opens the free download page. Obsidian is optional and needs
+no account; AlphaCode works exactly the same without it. **Show folder** opens the vault in
+Explorer. See [Claude memory vault](#claude-memory-vault) for what is inside.
 
 ### Pane header and footer
 
@@ -405,6 +419,22 @@ profiles. It does not contain terminal output, chat transcripts, or any secrets.
 
 Editing the file by hand is fine while the app is closed. The app validates it on load and
 refuses anything malformed rather than guessing.
+
+### Claude memory vault
+
+```
+%USERPROFILE%\AlphaCode Vault\
+```
+
+The vault contains no copies. Each folder under `Projects\` is a directory junction to the real
+memory folder Claude Code keeps under `%USERPROFILE%\.claude\projects\<project>\memory\`, so a
+note Claude writes appears in the vault at once, and a note you edit or delete in Obsidian is
+what Claude reads the next time it starts in that project. AlphaCode rescans on launch and every
+five minutes: it adds junctions for new projects, removes junctions whose project is gone, and
+rewrites its own index notes (`Home.md`, one note per project under `Projects\`, one note per
+memory type under `Types\`). Those index notes carry `generated: alphacode` in their frontmatter;
+a file without that marker is never overwritten. Nothing inside Claude's own folders is written
+by AlphaCode.
 
 ## Troubleshooting
 

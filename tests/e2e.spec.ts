@@ -39,6 +39,8 @@ test('production dashboard, real terminals, layout editing and persistence',asyn
   await page.getByRole('button',{name:'Restore Operations',exact:true}).click();
   await page.getByRole('button',{name:'Move Operations up',exact:true}).click();
   expect(await page.locator('.pane-list-name').allTextContents()).toEqual(['Claude A','Claude B','Claude C','Operations','Claude D','PowerShell Admin','Local · Coding','Local · General']);
+  await expect(page.locator('.vault-section .section-heading')).toHaveText('Claude memory');
+  await expect(page.locator('.vault-section .vault-meta')).toContainText(/\d+ projects · \d+ notes/);
   await page.getByRole('button',{name:'Duplicate Operations',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(9);
   await expect(page.locator('.pane[data-pane-title="Operations copy"] .pane-status')).toHaveText('Ready');
   await page.getByRole('button',{name:'Close Operations copy',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(8);

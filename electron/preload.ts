@@ -16,5 +16,8 @@ const bridge:BridgeApi={
   listModels:profile=>ipcRenderer.invoke('bridge:list-models',profile),
   chat:(paneId,profile,messages)=>ipcRenderer.invoke('bridge:chat',paneId,profile,messages),
   cancelChat:paneId=>ipcRenderer.invoke('bridge:cancel-chat',paneId),
+  vaultInfo:()=>ipcRenderer.invoke('bridge:vault-info'),
+  openVault:()=>ipcRenderer.invoke('bridge:open-vault'),
+  showVaultFolder:()=>ipcRenderer.invoke('bridge:show-vault-folder'),
 };
 contextBridge.exposeInMainWorld('bridge',bridge);

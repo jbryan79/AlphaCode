@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type IpcMainEvent } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type IpcMainEvent } from 'electron';
 import { join, resolve } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -9,6 +9,7 @@ import { assertNormalToken, StateStore } from './runtime-core';
 import { TerminalManager } from './terminals';
 import { ElevatedManager, isAdministrator, runElevatedHelper } from './elevated';
 import { ProviderClient } from './providers';
+import { MemoryVault } from './vault';
 
 const DEFAULT_ROOT=app.getPath('home');
 if(process.env.ALPHACODE_DATA_DIR)app.setPath('userData',resolve(process.env.ALPHACODE_DATA_DIR));
@@ -20,6 +21,7 @@ const dev=process.argv.includes('--dev');
 const admins=new ElevatedManager(process.execPath,app.isPackaged?null:app.getAppPath(),emit);
 const providers=new ProviderClient();
 const stateStore=new StateStore(join(app.getPath('userData'),'state.json'));
+const vault=new MemoryVault(join(DEFAULT_ROOT,'AlphaCode Vault'),process.env.CLAUDE_CONFIG_DIR?resolve(process.env.CLAUDE_CONFIG_DIR):join(DEFAULT_ROOT,'.claude'),join(process.env.LOCALAPPDATA||join(DEFAULT_ROOT,'AppData','Local'),'Programs','Obsidian','Obsidian.exe'),join(app.getPath('appData'),'obsidian','obsidian.json'),providers);
 
 function authorized(event:IpcMainInvokeEvent|IpcMainEvent):void{
   if(!window||event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame)throw new Error('Untrusted IPC caller.');
@@ -41,6 +43,9 @@ function registerIpc():void{
   handle('bridge:list-models',profile=>providers.listModels(profile));
   handle('bridge:chat',(id,profile,messages)=>providers.chat(id,profile,messages));
   handle('bridge:cancel-chat',(id:string)=>providers.cancel(id));
+  handle('bridge:vault-info',()=>vault.info());
+  handle('bridge:open-vault',()=>shell.openExternal(vault.obsidianInstalled()?`obsidian://open?path=${encodeURIComponent(vault.path)}`:'https://obsidian.md/download'));
+  handle('bridge:show-vault-folder',async()=>{const problem=await shell.openPath(vault.path);if(problem)throw new Error(problem);});
 }
 
 const windowPath=join(app.getPath('userData'),'window.json');
@@ -71,7 +76,7 @@ if(helperIndex>=0){
   // The helper owns no BrowserWindow, renderer, or IPC handlers.
   app.whenReady().then(()=>runElevatedHelper(process.argv[helperIndex+1]||'',spawn)).catch(error=>{console.error('AlphaCode helper:',(error as Error).message);app.exit(1);});
 }else{
-  app.whenReady().then(async()=>{elevatedApp=isAdministrator();assertNormalToken(elevatedApp);for(const suffix of ['a','b','c','d'])await mkdir(join(DEFAULT_ROOT,'workspaces',`claude-${suffix}`),{recursive:true});registerIpc();await createWindow();}).catch(error=>{dialog.showErrorBox('AlphaCode cannot start',(error as Error).message);app.exit(1);});
+  app.whenReady().then(async()=>{elevatedApp=isAdministrator();assertNormalToken(elevatedApp);for(const suffix of ['a','b','c','d'])await mkdir(join(DEFAULT_ROOT,'workspaces',`claude-${suffix}`),{recursive:true});registerIpc();await createWindow();void vault.scan();setInterval(()=>void vault.scan(),5*60*1000);}).catch(error=>{dialog.showErrorBox('AlphaCode cannot start',(error as Error).message);app.exit(1);});
   app.on('window-all-closed',()=>app.quit());
   let quitting=false;
   app.on('before-quit',event=>{if(quitting)return;quitting=true;event.preventDefault();admins.stopAll();providers.cancelAll();Promise.all([terminals.stopAll(),stateStore.flush()]).finally(()=>app.quit());});

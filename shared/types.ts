@@ -27,4 +27,7 @@ export interface BridgeApi {
   listModels(profile: LocalProfile): Promise<string[]>;
   chat(paneId: string, profile: LocalProfile, messages: ChatMessage[]): Promise<string>;
   cancelChat(paneId: string): Promise<void>;
+  vaultInfo(): Promise<VaultInfo>;
+  openVault(): Promise<void>;
+  showVaultFolder(): Promise<void>;
 }
