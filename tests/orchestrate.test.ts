@@ -313,3 +313,37 @@ describe('concurrent launch', () => {
     await f.run.stop();
   });
 });
+
+import { mkdtemp as mkTemp, writeFile as write } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { main as cli } from '../electron/cli';
+
+describe('alphacode command', () => {
+  it('runs every subcommand against the server and prints JSON', async () => {
+    const f = await fixture(); const dir = await mkTemp(join(tmpdir(), 'alphacode-cli-'));
+    const ctl = { ALPHACODE_CONTROL_URL: `http://127.0.0.1:${f.run.port}`, ALPHACODE_CONTROL_TOKEN: f.run.controlToken };
+    const run = (args: string[], env: Record<string, string> = ctl, stdin: NodeJS.ReadableStream | null = null) => cli(args, env, stdin);
+    expect(JSON.parse((await run(['panes'])).out)).toHaveLength(4);
+    await write(join(dir, 'api.md'), 'Build the endpoint.'); await write(join(dir, 'ui.md'), 'Build the screen.');
+    await write(join(dir, 'plan.json'), JSON.stringify({ tests: 'npm test', tasks: [{ id: 'api', title: 'API', files: ['electron/api.ts'], model: 'sonnet', minutes: 20, advisor: true, prompt: 'api.md' }, { id: 'ui', title: 'UI', files: ['src/'], model: 'fable', minutes: 30, advisor: false, prompt: 'ui.md' }] }));
+    const planned = await run(['plan', join(dir, 'plan.json')]); expect(planned.code).toBe(0); expect(JSON.parse(planned.out).tasks[0].paneId).toBe('p2');
+    expect((await run(['task', 'start', 'api'])).code).toBe(1); // not approved
+    expect((await run(['plan', join(dir, 'plan.json'), '--approved'])).code).toBe(0);
+    expect(JSON.parse((await run(['task', 'start', 'api'])).out).state).toBe('working');
+    const hook = { ALPHACODE_CONTROL_URL: ctl.ALPHACODE_CONTROL_URL, ALPHACODE_HOOK_TOKEN: f.run.hookTokenFor('p2'), ALPHACODE_PANE_ID: 'p2' };
+    expect((await run(['report', 'waiting'], hook, Readable.from([JSON.stringify({ notification_type: 'permission_prompt' })]))).code).toBe(0); expect(f.run.tasks()[0].state).toBe('waiting');
+    f.run.typed('p2');
+    expect((await run(['report', 'done'], hook)).code).toBe(0); expect(f.run.tasks()[0].state).toBe('done');
+    expect((await run(['report', 'done'], ctl)).code).toBe(1); // control env cannot report
+    expect(JSON.parse((await run(['task', 'status', 'api'])).out).state).toBe('done');
+    expect(JSON.parse((await run(['task', 'status'])).out)).toHaveLength(2);
+    expect(JSON.parse((await run(['task', 'wait', 'ui', '--timeout', '0.1'])).out).changed).toBe(false);
+    await write(join(dir, 'fb.md'), 'fix tests'); f.run.writer = () => {}; f.run.alive = () => true;
+    expect(JSON.parse((await run(['task', 'retry', 'api', join(dir, 'fb.md')])).out).retries).toBe(1);
+    await write(join(dir, 'q.md'), 'review'); expect(JSON.parse((await run(['ask', 'p4', join(dir, 'q.md')])).out).answer).toBe('advice');
+    await write(join(dir, 'r.md'), 'All done.'); expect(JSON.parse((await run(['finish', join(dir, 'r.md')])).out).summary).toBe('All done.');
+    const bad = await run(['nope']); expect(bad.code).toBe(1); expect(bad.err).toMatch(/usage/i);
+    expect((await run(['panes'], {})).err).toMatch(/ALPHACODE_CONTROL_URL/);
+    await f.run.stop(); await rm(dir, { recursive: true, force: true });
+  });
+});
