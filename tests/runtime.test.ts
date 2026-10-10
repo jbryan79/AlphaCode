@@ -148,3 +148,11 @@ describe('terminal lifecycle',()=>{
     const old=manager.start({...pane,cwd},80,24);manager.stop('p1');const current=manager.start({...pane,cwd},80,24);await Promise.all([old,current]);expect(spawns).toBe(1);expect(manager.has('p1')).toBe(true);manager.stopAll();
   });
 });
+
+describe('state store current snapshot', () => {
+  it('exposes the last validated saved state', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'alphacode-cur-')); const store = new StateStore(join(dir, 'state.json'));
+    expect(store.current).toBeNull(); await store.save(state); expect(store.current?.activeWorkspaceId).toBe('w1');
+    await expect(store.save({ ...state, version: 2 })).rejects.toThrow(); expect(store.current?.activeWorkspaceId).toBe('w1');
+  });
+});

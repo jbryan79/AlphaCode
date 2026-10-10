@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { join, basename, dirname } from 'node:path';
 import type { LocalProfile, VaultGraph, VaultInfo, VaultTarget } from '../shared/types';
 import { validateId, validateProfile, string as str } from '../shared/domain';
-import { buildGraph, buildMessages, cwdFromTranscript, homeNote, hubNote, isGenerated, matchTargets, parseAnswer, parseFrontmatter, pickNotes, resolveSlug, TYPES, uniqueNames, wikilinks, type NoteMeta } from '../shared/vault';
+import { buildGraph, buildMessages, cwdFromTranscript, homeNote, hubNote, isGenerated, matchTargets, parseAnswer, parseFrontmatter, pickNotes, resolveSlug, sanitizeName, TYPES, uniqueNames, wikilinks, type NoteMeta } from '../shared/vault';
 import type { ProviderClient } from './providers';
 
 interface Project { slug: string; name: string; cwd: string; memoryDir: string; }
@@ -53,6 +53,13 @@ export class MemoryVault {
     await mkdir(dirname(this.obsidianRegistry), { recursive: true });
     const temporary = `${this.obsidianRegistry}.alphacode-tmp`; await writeFile(temporary, JSON.stringify(reg), { encoding: 'utf8' }); await rename(temporary, this.obsidianRegistry);
     return true;
+  }
+  /** Writes a note the user asked for (a run report) under a vault subfolder. Folder and name are sanitized; never overwrites an existing file. */
+  async writeNote(folder: string, name: string, text: string): Promise<string> {
+    if (!folder.trim() || folder !== sanitizeName(folder)) throw new Error('Note folder must be a plain folder name inside the vault'); const dir = join(this.path, folder);
+    await mkdir(dir, { recursive: true }); let file = join(dir, `${sanitizeName(name)}.md`), n = 1;
+    while (existsSync(file)) file = join(dir, `${sanitizeName(name)} (${++n}).md`);
+    await writeFile(file, text, 'utf8'); return file;
   }
   private async discover(projectsDir: string): Promise<Project[]> {
     let slugs: string[] = []; try { slugs = (await readdir(projectsDir, { withFileTypes: true })).filter(d => d.isDirectory()).map(d => d.name); } catch { return []; }

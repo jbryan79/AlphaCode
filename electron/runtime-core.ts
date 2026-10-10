@@ -18,10 +18,11 @@ const replace=async(from:string,to:string)=>{for(let i=0;;i++){try{return await 
 export class StateStore {
   private writes:Promise<void>=Promise.resolve();
   private recoveryRequired=false;
+  current:AppState|null=null;
   constructor(public path:string){}
   async load():Promise<AppState|null>{
     let invalid=false;
-    for(const path of [this.path,this.path+'.bak']){try{const state=validateState(JSON.parse(await readFile(path,'utf8')));this.recoveryRequired=false;return state;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')invalid=true;}}
+    for(const path of [this.path,this.path+'.bak']){try{const state=validateState(JSON.parse(await readFile(path,'utf8')));this.recoveryRequired=false;this.current=state;return state;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')invalid=true;}}
     if(invalid){this.recoveryRequired=true;throw new Error(`Saved workspace state is corrupt or invalid and no valid backup is available. Original files are preserved at ${this.path} and ${this.path}.bak. Move the invalid files aside, restart AlphaCode, then import a known-good workspace to recover.`);}
     this.recoveryRequired=false;
     return null;
@@ -29,6 +30,7 @@ export class StateStore {
   save(value:unknown):Promise<void>{
     if(this.recoveryRequired)return Promise.reject(new Error('State recovery is required. Automatic saves are blocked to preserve the original invalid files. Move them aside and restart AlphaCode before saving.'));
     let state:AppState;try{state=validateState(value);}catch(error){return Promise.reject(error);}
+    this.current=state;
     const next=this.writes.catch(()=>{}).then(async()=>{await mkdir(dirname(this.path),{recursive:true});const temporary=this.path+'.tmp';await writeFile(temporary,JSON.stringify(state,null,2),'utf8');try{validateState(JSON.parse(await readFile(this.path,'utf8')));await copyFile(this.path,this.path+'.bak');}catch{}await replace(temporary,this.path);});this.writes=next;return next;
   }
   /** Resolves once every save accepted so far has reached disk; quitting waits on this. */
