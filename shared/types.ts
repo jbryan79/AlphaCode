@@ -9,6 +9,9 @@ export interface AppState { version: 1; activeWorkspaceId: string; workspaces: W
 export interface SessionEvent { paneId: string; kind: 'data' | 'status'; data?: string; status?: SessionStatus; message?: string; pid?: number; elevated?: boolean; }
 export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; }
 export interface AppInfo { version: string; platform: string; statePath: string; appElevated: boolean; root: string; }
+export interface VaultInfo { path: string; projects: number; notes: number; obsidian: boolean; scannedAt: string; message: string; }
+export interface VaultGraph { nodes: { id: string; label: string; project: string; type: string }[]; edges: { from: string; to: string }[]; }
+export interface VaultTarget { kind: 'project' | 'obsidian' | 'workspace'; name: string; path: string; }
 export interface BridgeApi {
   loadState(): Promise<AppState | null>;
   saveState(state: AppState): Promise<void>;
