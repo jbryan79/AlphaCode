@@ -45,10 +45,15 @@ finishes.
 
 Verified against Claude Code 2.1.296: `--worktree [name]`, `--settings <file-or-json>`,
 `--append-system-prompt`, `--model`, `--permission-mode`, `--name`, `--session-id`,
-`--resume` all exist. Two behaviors are documented but not yet exercised and the
-implementation plan's first task is a spike that proves them: passing the first message as
-the positional prompt together with `--worktree` in interactive mode, and hook settings
-loaded through `--settings` merging with the user's own settings.
+`--resume` all exist. Spiked in print mode (`claude -p`; no TTY available): `--worktree task-x`
+creates the worktree at `<repo>/.claude/worktrees/task-x` on branch `worktree-task-x` (pattern
+`worktree-<name>`), locked by the session. A Stop hook supplied only through `--settings <file>`
+fired; the working `command` form was a forward-slash absolute path to the `.cmd` shim, quoted,
+with an argument: `"D:/path/hook.cmd" stop`. The `--settings` file did not need to exist inside the
+worktree. `claude -p --resume <session-id>` run from inside the worktree path resumed the
+session (it recalled its earlier reply) with cwd set to the worktree path. The interactive
+positional prompt together with `--worktree` is documented CLI behavior and is verified by the
+real run in Task 7.
 
 ## The toggle
 
