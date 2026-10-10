@@ -88,7 +88,7 @@ export class OrchestrateRun {
     const kept = new Map([...this.live.entries()].filter(([, l]) => l.task.state !== 'planned'));
     const free = workers.filter(id => !kept.has(id));
     for (const pt of plan.tasks) { if ([...kept.values()].some(l => l.task.id === pt.id)) continue; const paneId = free.shift(); if (!paneId) this.err(409, 'No free worker pane for the plan'); const { prompt, ...rest } = pt; const task: Task = { ...rest, state: 'planned', paneId, branch: '', worktree: '', startedAt: '', finishedAt: '', retries: 0, sessionId: '', message: '', hidden: false }; kept.set(paneId, this.mintTask(task, prompt)); }
-    this.live = kept; this.plan ={ ...plan, approved: plan.approved || this.plan?.approved === true }; this.bump();
+    this.live = kept; this.plan = { ...plan, approved: plan.approved || this.plan?.approved === true }; this.bump();
     return { ...this.plan, tasks: this.tasks() };
   }
   private async launchPane(l: Live, signal: Signal): Promise<Task> {

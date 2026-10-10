@@ -193,7 +193,7 @@ describe('control server', () => {
     await new Promise(r => setTimeout(r, 20));
     const sid = f.run.tasks()[0].sessionId; expect(sid).not.toBe('');
     expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409); expect(f.run.tasks()[0].sessionId).toBe(sid);
-    const o =f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2'));
+    const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2'));
     release(); expect((await first).status).toBe(200);
     const bad = await fixture({ launch: async () => { throw new Error('Cannot find claude'); } });
     await call(bad.run, bad.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
@@ -288,12 +288,13 @@ describe('control server fixes', () => {
   it('a plan that runs out of panes leaves the previous state intact', async () => {
     const f = await fixture();
     await call(f.run, C(f), 'POST', '/plan', { ...planBody, approved: true });
-    await call(f.run, C(f), 'POST', '/tasks/api/start'); await call(f.run, C(f), 'POST', '/tasks/ui/start');
+    await call(f.run, C(f), 'POST', '/tasks/api/start'); // ui stays planned, so p3 is the only free pane
     await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
     const before = f.run.tasks();
     const t = (id: string) => ({ ...planBody.tasks[0], id, files: [`src/${id}/`] });
-    expect((await call(f.run, C(f), 'POST', '/plan', { tests: 'npm test', tasks: [t('n1'), t('n2')] })).status).toBe(409);
-    expect(f.run.tasks()).toEqual(before);
+    const r = await call(f.run, C(f), 'POST', '/plan', { tests: 'npm test', tasks: [t('n1'), t('n2')] });
+    expect(r.status).toBe(409); expect(r.body.error).toMatch(/No free worker pane/);
+    expect(f.run.tasks()).toEqual(before); expect(before.map(x => [x.id, x.state])).toEqual([['api', 'done'], ['ui', 'planned']]);
     await f.run.stop();
   });
   it('finish skips heading lines for the summary', async () => {
