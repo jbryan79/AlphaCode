@@ -53,19 +53,20 @@ export function buildMessages(context: NoteMeta[], question: string): ChatMessag
   return [{ role: 'system', content: SYSTEM }, { role: 'user', content: `${notes}\n\n---\nQuestion: ${question}` }];
 }
 export function parseAnswer(text: string, contextNames: string[]): { answer: string; notes: string[] } {
-  const m = /\n?\s*notes used:\s*(.*)\s*$/i.exec(text);
+  const m = /\n?[\s*_]*notes used[\s*_:]*(.*?)\s*$/i.exec(text);
   if (!m) return { answer: text.trim(), notes: contextNames };
-  const named = m[1].split(/[,;]/).map(s => s.trim().replace(/^\[\[|\]\]$/g, '').toLowerCase()).filter(Boolean);
+  const named = m[1].split(/[,;]/).map(s => s.trim().replace(/^[\[*_`]+|[\]*_`]+$/g, '').toLowerCase()).filter(Boolean);
   return { answer: text.slice(0, m.index).trim(), notes: contextNames.filter(c => named.includes(c.toLowerCase())) };
 }
-export const COMMAND = /^\s*(launch|open|start)\s+(.+?)\s*$/i;
+/** A launch command: an action word, a name, and no question mark, so "Open questions about auth?" still reaches the model. */
+export const COMMAND = /^\s*(launch|open|start)\s+([^?]+?)\s*$/i;
 export const nameKey = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-/** Per kind, only the best tier survives: exact beats prefix beats contains. */
+/** Per kind, only the best tier survives: exact beats prefix beats contains. Keys shorter than three characters match nothing. */
 export function matchTargets(query: string, candidates: VaultTarget[]): VaultTarget[] {
-  const q = nameKey(query); if (!q) return [];
-  const tier = (c: VaultTarget) => { const k = nameKey(c.name); return k === q ? 0 : k.startsWith(q) ? 1 : k.includes(q) ? 2 : 3; };
+  const q = nameKey(query); if (q.length < 3) return [];
+  const tier = (c: VaultTarget): 0 | 1 | 2 | 3 => { const k = nameKey(c.name); return k === q ? 0 : k.startsWith(q) ? 1 : k.includes(q) ? 2 : 3; };
   const out: VaultTarget[] = [];
-  for (const kind of ['project', 'obsidian', 'workspace'] as const) { const mine = candidates.filter(c => c.kind === kind).map(c => ({ c, t: tier(c) })).filter(x => x.t < 3), best = Math.min(...mine.map(x => x.t)); out.push(...mine.filter(x => x.t === best).map(x => x.c)); }
+  for (const kind of ['project', 'obsidian', 'workspace'] as const) { const mine = candidates.filter(c => c.kind === kind).map(c => ({ c, t: tier(c) })).filter(x => x.t < 3), best = Math.min(...mine.map(x => x.t)); out.push(...mine.filter(x => x.t === best).map(x => ({ ...x.c, tier: x.t as 0 | 1 | 2 }))); }
   return out;
 }
 export function buildGraph(notes: NoteMeta[]): VaultGraph {

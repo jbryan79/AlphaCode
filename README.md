@@ -204,9 +204,12 @@ its own as it learns your preferences and your projects. AlphaCode gathers all o
 into one Obsidian vault so you can read, search, and graph everything Claude remembers. The
 section shows how many projects and notes the vault holds and where it lives.
 
-**Open in Obsidian** opens the vault in Obsidian. The first time, Obsidian asks whether to open
-the folder as a vault; say yes and it stays in your vault list. If Obsidian is not installed the
-button reads **Get Obsidian** and opens the free download page. Obsidian is optional and needs
+**Open in Obsidian** adds the vault to Obsidian's vault list the first time and opens it.
+Obsidian only opens vaults it already knows, and a running Obsidian reads that list at startup,
+so if Obsidian happens to be open at that first click, AlphaCode shows the vault folder instead
+and asks you to use Obsidian's **Open folder as vault** once, or to close Obsidian and click
+again. If Obsidian is not installed the button reads **Get Obsidian** and opens the free
+download page. Obsidian is optional and needs
 no account; AlphaCode works exactly the same without it. **Show folder** opens the vault in
 Explorer. See [Claude memory vault](#claude-memory-vault) for what is inside.
 
@@ -364,9 +367,10 @@ A Vault pane talks to the [Claude memory vault](#claude-memory-vault) using one 
 model profiles, so nothing leaves your machine.
 
 - The **graph** at the top is every note in the vault: discs are notes, colored by memory type,
-  larger discs are projects, lines are links between notes. It drifts gently at rest, pulses
-  while a question is being answered, and lights up the notes an answer came from. Hover a disc
-  to read its name. If Windows is set to reduce motion, the graph is still.
+  larger discs are projects, lines are links between notes. It settles into place, pulses
+  while a question is being answered, and lights up the notes an answer came from for ten
+  seconds. Hover a disc to read its name. Once it is still nothing is redrawn, so an idle pane
+  costs nothing. If Windows is set to reduce motion, the pulse is skipped.
 - **Ask a question** in the composer. AlphaCode picks the notes whose names, descriptions, and
   text best match your words, sends only those to the model, and shows the answer with a chip
   for each note it used. Clicking a chip flashes that note in the graph. If nothing matches,

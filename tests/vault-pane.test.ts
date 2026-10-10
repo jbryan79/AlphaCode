@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildGraph, buildMessages, COMMAND, matchTargets, nameKey, parseAnswer, pickNotes, scoreNote, tokens, type NoteMeta } from '../shared/vault';
@@ -36,8 +36,8 @@ describe('MemoryVault questions and commands', () => {
   it('resolves launch targets across projects, Obsidian vaults and workspaces', async () => {
     const f = await vaultFixture('');
     const t = await f.vault.resolve('Peptide Sciences 101', [{ id: 'w1', name: 'Peptide Day' }]);
-    expect(t).toEqual([{ kind: 'project', name: 'PeptideSciences101', path: 'D:\\Dev\\PeptideSciences101' }, { kind: 'obsidian', name: 'PeptideSciences101-Graph', path: 'E:\\Brain\\PeptideSciences101-Graph' }]);
-    expect(await f.vault.resolve('peptide day', [{ id: 'w1', name: 'Peptide Day' }])).toEqual([{ kind: 'workspace', name: 'Peptide Day', path: 'w1' }]);
+    expect(t).toEqual([{ kind: 'project', name: 'PeptideSciences101', path: 'D:\\Dev\\PeptideSciences101', tier: 0 }, { kind: 'obsidian', name: 'PeptideSciences101-Graph', path: 'E:\\Brain\\PeptideSciences101-Graph', tier: 1 }]);
+    expect(await f.vault.resolve('peptide day', [{ id: 'w1', name: 'Peptide Day' }])).toEqual([{ kind: 'workspace', name: 'Peptide Day', path: 'w1', tier: 0 }]);
     await expect(f.vault.resolve('x', [{ id: 'bad id', name: 'n' }])).rejects.toThrow();
     expect(f.vault.graph().nodes.map(n => n.id)).toEqual(['hub:PeptideSciences101', 'PeptideSciences101/fonts', 'PeptideSciences101/stack']);
     await rm(f.root, { recursive: true, force: true });
@@ -47,6 +47,40 @@ describe('MemoryVault questions and commands', () => {
     expect(await f.vault.obsidianUrl('e:\\brain\\brain\\')).toBe('obsidian://open?path=e%3A%5Cbrain%5Cbrain%5C');
     await expect(f.vault.obsidianUrl('C:\\Windows')).rejects.toThrow(/registered/);
     await rm(f.root, { recursive: true, force: true });
+  });
+  it('registers itself in the Obsidian vault list without a byte-order mark, once', async () => {
+    const f = await vaultFixture('');
+    expect(await f.vault.register()).toBe(true);
+    const raw = await readFile(join(f.root, 'obsidian.json'));
+    expect(raw[0]).toBe('{'.charCodeAt(0));
+    const reg = JSON.parse(raw.toString('utf8'));
+    const mine = Object.entries(reg.vaults).filter(([, v]: any) => v.path === join(f.root, 'vault'));
+    expect(mine.length).toBe(1); expect(mine[0][0]).toMatch(/^[0-9a-f]{16}$/); expect(typeof (mine[0][1] as any).ts).toBe('number');
+    expect(reg.vaults.a.path).toBe('E:\\Brain\\PeptideSciences101-Graph');
+    expect(await f.vault.register()).toBe(false);
+    expect(Object.keys(JSON.parse(await readFile(join(f.root, 'obsidian.json'), 'utf8')).vaults).length).toBe(3);
+    const fresh = new MemoryVault(join(f.root, 'v2'), join(f.root, 'claude'), 'x', join(f.root, 'none', 'obsidian.json'), {} as any);
+    expect(await fresh.register()).toBe(true);
+    expect(Object.keys(JSON.parse(await readFile(join(f.root, 'none', 'obsidian.json'), 'utf8')).vaults).length).toBe(1);
+    await rm(f.root, { recursive: true, force: true });
+  });
+});
+
+describe('vault graph canvas helpers', () => {
+  it('fits the layout into the canvas without ever enlarging it', async () => {
+    const { fitTransform, shouldAnimate, HIGHLIGHT_MS } = await import('../src/VaultGraph');
+    const t = fitTransform([{ x: -600, y: -300 }, { x: 600, y: 300 }], 550, 160);
+    expect(t.scale).toBeLessThan(0.25); expect(t.cx).toBe(0); expect(t.cy).toBe(0);
+    expect(-600 * t.scale + 275).toBeGreaterThanOrEqual(0); expect(300 * t.scale + 80).toBeLessThanOrEqual(160);
+    expect(fitTransform([{ x: 10, y: 10 }, { x: 30, y: 20 }], 550, 160)).toEqual({ scale: 1, cx: 20, cy: 15 });
+    expect(fitTransform([], 550, 160).scale).toBe(1);
+    const rest = { hot: 0, settled: true, thinking: false, highlightAt: 0, pulseAt: 0 };
+    expect(shouldAnimate(rest, 100000, false)).toBe(false);
+    expect(shouldAnimate({ ...rest, highlightAt: 100000 - 5000 }, 100000, false)).toBe(true);
+    expect(shouldAnimate({ ...rest, highlightAt: 100000 - HIGHLIGHT_MS - 1 }, 100000, false)).toBe(false);
+    expect(shouldAnimate({ ...rest, highlightAt: 100000 - 5000 }, 100000, true)).toBe(false);
+    expect(shouldAnimate({ ...rest, thinking: true }, 100000, false)).toBe(true);
+    expect(shouldAnimate({ ...rest, hot: 0.5 }, 100000, true)).toBe(true);
   });
 });
 
@@ -74,6 +108,7 @@ describe('vault questions', () => {
   });
   it('parses the trailing Notes used line and filters to context names', () => {
     expect(parseAnswer('Use Segoe UI.\n\nNotes used: [[Fonts-A]], ghost, b', ['fonts-a', 'b', 'c'])).toEqual({ answer: 'Use Segoe UI.', notes: ['fonts-a', 'b'] });
+    expect(parseAnswer('Bold model.\n\n**Notes used:** _a_, `b`', ['a', 'b'])).toEqual({ answer: 'Bold model.', notes: ['a', 'b'] });
     expect(parseAnswer('No idea.\nNotes used: none', ['a'])).toEqual({ answer: 'No idea.', notes: [] });
     expect(parseAnswer('Plain answer', ['a', 'b'])).toEqual({ answer: 'Plain answer', notes: ['a', 'b'] });
   });
@@ -87,15 +122,18 @@ describe('vault commands', () => {
     expect(COMMAND.exec('start x')).not.toBeNull();
     expect(COMMAND.exec('how do I launch x')).toBeNull();
     expect(COMMAND.exec('launch')).toBeNull();
+    expect(COMMAND.exec('Open questions about auth?')).toBeNull();
+    expect(COMMAND.exec('start by summarising the vault?')).toBeNull();
   });
-  it('matches per kind with exact beating prefix beating contains', () => {
+  it('matches per kind with exact beating prefix beating contains, reporting the tier', () => {
     const all = [c('project', 'PeptideSciences101'), c('project', 'Peptides'), c('obsidian', 'PeptideSciences101-Graph'), c('obsidian', 'Brain'), c('workspace', 'Development')];
     expect(nameKey('Peptide Sciences 101!')).toBe('peptidesciences101');
-    expect(matchTargets('Peptide Sciences 101', all).map(t => t.name)).toEqual(['PeptideSciences101', 'PeptideSciences101-Graph']);
+    expect(matchTargets('Peptide Sciences 101', all).map(t => [t.name, t.tier])).toEqual([['PeptideSciences101', 0], ['PeptideSciences101-Graph', 1]]);
     expect(matchTargets('pept', all).map(t => t.name)).toEqual(['PeptideSciences101', 'Peptides', 'PeptideSciences101-Graph']);
-    expect(matchTargets('sciences', all).map(t => t.name)).toEqual(['PeptideSciences101', 'PeptideSciences101-Graph']);
+    expect(matchTargets('sciences', all).map(t => [t.name, t.tier])).toEqual([['PeptideSciences101', 2], ['PeptideSciences101-Graph', 2]]);
     expect(matchTargets('dev', all).map(t => t.name)).toEqual(['Development']);
     expect(matchTargets('???', all)).toEqual([]);
+    expect(matchTargets('it', all)).toEqual([]);
     expect(matchTargets('nothing', [])).toEqual([]);
   });
 });

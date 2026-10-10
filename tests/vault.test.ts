@@ -122,6 +122,24 @@ describe('MemoryVault scan', () => {
     expect(await readFile(join(f.root, 'v2', 'Home.md'), 'utf8')).toContain('No memories yet');
     await rm(f.root, { recursive: true, force: true });
   });
+  it('links to MEMORY.md only when Claude has written one', async () => {
+    const f = await fixture(); await f.make().scan();
+    expect(await readFile(join(f.vault, 'Projects', 'AlphaCode.md'), 'utf8')).toContain('[[Projects/AlphaCode/MEMORY|');
+    expect(await readFile(join(f.vault, 'Projects', 'NaviStation_JB.md'), 'utf8')).not.toContain('MEMORY');
+    await rm(f.root, { recursive: true, force: true });
+  });
+  it('survives a real folder or an odd name under Projects and still refreshes counts', async () => {
+    const f = await fixture();
+    await mkdir(join(f.vault, 'Projects', 'AlphaCode'), { recursive: true }); await writeFile(join(f.vault, 'Projects', 'AlphaCode', 'keep.md'), 'user data');
+    await f.project('odd', 'D:\\odd\\weird.md', { 'w.md': memory('name: w\ndescription: d\nmetadata:\n  type: user') });
+    const info = await f.make().scan();
+    expect(info.projects).toBe(4); expect(info.notes).toBe(5);
+    expect(info.message).toContain('AlphaCode');
+    expect(await readFile(join(f.vault, 'Projects', 'AlphaCode', 'keep.md'), 'utf8')).toBe('user data');
+    expect((await lstat(join(f.vault, 'Projects', 'NaviStation_JB'))).isSymbolicLink()).toBe(true);
+    expect(await readFile(join(f.vault, 'Home.md'), 'utf8')).toContain('- [[Projects/weird.md|weird.md]] (1)');
+    await rm(f.root, { recursive: true, force: true });
+  });
   it('shares one in-flight scan and serves info() from the last result', async () => {
     const f = await fixture(); const v = f.make();
     const [a, b] = await Promise.all([v.scan(), v.scan()]); expect(a).toBe(b);

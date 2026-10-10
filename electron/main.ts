@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, ty
 import { join, resolve } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { spawn } from 'node-pty';
 import type { PaneConfig, SessionEvent } from '../shared/types';
 import { validateId, validatePane, validateWorkspace } from '../shared/domain';
@@ -23,6 +24,7 @@ const providers=new ProviderClient();
 const stateStore=new StateStore(join(app.getPath('userData'),'state.json'));
 const vault=new MemoryVault(join(DEFAULT_ROOT,'AlphaCode Vault'),process.env.CLAUDE_CONFIG_DIR?resolve(process.env.CLAUDE_CONFIG_DIR):join(DEFAULT_ROOT,'.claude'),join(process.env.LOCALAPPDATA||join(DEFAULT_ROOT,'AppData','Local'),'Programs','Obsidian','Obsidian.exe'),join(app.getPath('appData'),'obsidian','obsidian.json'),providers);
 
+const obsidianRunning=()=>new Promise<boolean>(resolve=>execFile('tasklist.exe',['/FI','IMAGENAME eq Obsidian.exe','/NH'],{windowsHide:true},(error,stdout)=>resolve(!error&&/obsidian\.exe/i.test(stdout))));
 function authorized(event:IpcMainInvokeEvent|IpcMainEvent):void{
   if(!window||event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame)throw new Error('Untrusted IPC caller.');
 }
@@ -44,7 +46,12 @@ function registerIpc():void{
   handle('bridge:chat',(id,profile,messages)=>providers.chat(id,profile,messages));
   handle('bridge:cancel-chat',(id:string)=>providers.cancel(id));
   handle('bridge:vault-info',()=>vault.info());
-  handle('bridge:open-vault',()=>shell.openExternal(vault.obsidianInstalled()?`obsidian://open?path=${encodeURIComponent(vault.path)}`:'https://obsidian.md/download'));
+  handle('bridge:open-vault',async()=>{
+    if(!vault.obsidianInstalled())return shell.openExternal('https://obsidian.md/download');
+    // Obsidian only opens vaults it already lists, so register first. A running Obsidian keeps its list in memory, so it must be told by hand once.
+    if(await vault.register()&&await obsidianRunning()){await shell.openPath(vault.path);throw new Error(`Obsidian is already running and has not loaded this vault yet. In Obsidian choose "Open folder as vault" and pick ${vault.path}, or close Obsidian and click Open in Obsidian again.`);}
+    await shell.openExternal(`obsidian://open?path=${encodeURIComponent(vault.path)}`);
+  });
   handle('bridge:show-vault-folder',async()=>{const problem=await shell.openPath(vault.path);if(problem)throw new Error(problem);});
   handle('bridge:vault-graph',()=>vault.graph());
   handle('bridge:vault-ask',(id,profile,question)=>vault.ask(id,profile,question));

@@ -14,11 +14,12 @@ export default function VaultPane({pane,profiles,workspaces,onProfile,onEditProf
   const say=(content:string)=>setEntries(e=>[...e,{role:'system',content}]);
   const command=async(name:string)=>{
     const targets=await window.bridge.vaultResolve(name,workspaces);
-    const projects=targets.filter(t=>t.kind==='project'),vaults=targets.filter(t=>t.kind==='obsidian'),spaces=targets.filter(t=>t.kind==='workspace');
+    // Only an exact or prefix match may open something on its own; a loose "contains" match is listed and the user retypes it.
+    const sure=targets.filter(t=>(t.tier??2)<2),projects=sure.filter(t=>t.kind==='project'),vaults=sure.filter(t=>t.kind==='obsidian'),spaces=sure.filter(t=>t.kind==='workspace');
     if(projects.length===1){onLaunch(projects[0]);say(`Opened a Claude pane in ${projects[0].path}.`);if(vaults.length===1){await window.bridge.openObsidianVault(vaults[0].path);say(`Opened Obsidian vault ${vaults[0].name}.`);}return;}
     if(!projects.length&&vaults.length===1){await window.bridge.openObsidianVault(vaults[0].path);say(`Opened Obsidian vault ${vaults[0].name}.`);return;}
     if(!projects.length&&!vaults.length&&spaces.length===1){onLoadWorkspace(spaces[0].path);say(`Loading workspace ${spaces[0].name}.`);return;}
-    say(targets.length?`More than one match for "${name}":\n${targets.map(t=>`- ${t.kind}: ${t.name}`).join('\n')}\nBe more specific.`:`Nothing in the vault, Obsidian, or your workspaces matches "${name}".`);
+    say(targets.length?`${sure.length?'More than one':'No exact'} match for "${name}":\n${targets.map(t=>`- ${t.kind}: ${t.name}`).join('\n')}\nType the full name to open one.`:`Nothing in the vault, Obsidian, or your workspaces matches "${name}".`);
   };
   const send=async()=>{
     if(busy||!prompt.trim())return; const text=prompt.trim(),m=COMMAND.exec(text); setPrompt('');setError('');setEntries(e=>[...e,{role:'user',content:text}]);

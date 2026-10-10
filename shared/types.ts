@@ -11,7 +11,8 @@ export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: s
 export interface AppInfo { version: string; platform: string; statePath: string; appElevated: boolean; root: string; }
 export interface VaultInfo { path: string; projects: number; notes: number; obsidian: boolean; scannedAt: string; message: string; }
 export interface VaultGraph { nodes: { id: string; label: string; project: string; type: string }[]; edges: { from: string; to: string }[]; }
-export interface VaultTarget { kind: 'project' | 'obsidian' | 'workspace'; name: string; path: string; }
+/** `tier`: 0 exact, 1 prefix, 2 contains. Only exact and prefix matches may act without confirmation. */
+export interface VaultTarget { kind: 'project' | 'obsidian' | 'workspace'; name: string; path: string; tier?: 0 | 1 | 2; }
 export interface BridgeApi {
   loadState(): Promise<AppState | null>;
   saveState(state: AppState): Promise<void>;
