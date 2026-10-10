@@ -130,7 +130,8 @@ test('a change made just before closing the window survives, and the window geom
 test('orchestrate mode runs a two-task plan through stub workers', async () => {
   // Earlier tests reshape the workspace; start from the default 8 panes again.
   await app.close(); await rm(dataDir, { recursive: true, force: true }); await mkdir(dataDir, { recursive: true }); await launch();
-  const repo = await mkdtemp(join(tmpdir(), 'alphacode-orch-e2e-'));
+  const repo = await mkdtemp(join(tmpdir(), 'alphacode-orch-e2e-')); let dir = '';
+  try {
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo }); await writeFile(join(repo, 'README.md'), '# e2e\n'); execFileSync('git', ['add', '.'], { cwd: repo }); execFileSync('git', ['-c', 'user.email=e2e@x', '-c', 'user.name=e2e', 'commit', '-qm', 'init'], { cwd: repo });
   const stub = join(root, 'tests', 'fixtures', 'fake-claude.cmd');
   // Point every Claude pane at the stub and the repo, then turn the mode on.
@@ -146,7 +147,7 @@ test('orchestrate mode runs a two-task plan through stub workers', async () => {
   await expect(page.locator('.tasks-section')).toContainText('Waiting for a plan');
   // Drive the control channel the way the orchestrator would, using the pane's own environment.
   const env = await page.evaluate(async () => (window as any).__orchestrateEnv);
-  const dir = await mkdtemp(join(tmpdir(), 'alphacode-plan-'));
+  dir = await mkdtemp(join(tmpdir(), 'alphacode-plan-'));
   await writeFile(join(dir, 'a.md'), 'A task'); await writeFile(join(dir, 'b.md'), 'B task');
   await writeFile(join(dir, 'plan.json'), JSON.stringify({ tests: '', tasks: [{ id: 'a', title: 'Alpha', files: ['a/'], model: 'sonnet', minutes: 5, advisor: false, prompt: 'a.md' }, { id: 'b', title: 'Beta', files: ['b/'], model: 'sonnet', minutes: 5, advisor: false, prompt: 'b.md' }] }));
   const cli = (...a: string[]) => execFileSync('node', [join(root, 'dist-electron', 'electron', 'cli.js'), ...a], { env: { ...process.env, ...env }, encoding: 'utf8' });
@@ -161,4 +162,6 @@ test('orchestrate mode runs a two-task plan through stub workers', async () => {
   await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-badge')).toHaveText('Done');
   await page.getByRole('button', { name: 'Turn orchestrate off', exact: true }).click();
   await expect(page.locator('.pane-badge')).toHaveCount(0);
+  expect(errors).toEqual([]);
+  } finally { for (const d of [repo, dir]) if (d) await rm(d, { recursive: true, force: true }).catch(() => {}); }
 });

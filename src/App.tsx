@@ -21,6 +21,7 @@ export default function App() {
   const [state,setState]=useState<AppState|null>(null),[statuses,setStatuses]=useState<Record<string,SessionEvent>>({}),[focused,setFocused]=useState(''),[maximized,setMaximized]=useState('');
   const [relaunch,setRelaunch]=useState<Record<string,number>>({}),[editor,setEditor]=useState<PaneConfig|null>(null),[profileEditor,setProfileEditor]=useState<LocalProfile|null>(null),[nameDialog,setNameDialog]=useState<'rename'|'save-as'|null>(null),[addOpen,setAddOpen]=useState(false),[sidebar,setSidebar]=useState(true),[moveMode,setMoveMode]=useState<'reflow'|'swap'>('reflow'),[notice,setNotice]=useState(''),[saveLabel,setSaveLabel]=useState('Saved locally'),[width,setWidth]=useState(1100),[viewport,setViewport]=useState(850),[statePath,setStatePath]=useState('');
   const [vault,setVault]=useState<VaultInfo|null>(null);
+  const [starting,setStarting]=useState(false);
   const [orch,setOrch]=useState<{approved:boolean;tasks:Task[];finished:string}>({approved:false,tasks:[],finished:''});
   const refreshVault=()=>{if(!window.bridge)return;window.bridge.vaultInfo().then(setVault).catch(e=>setVault({path:'',projects:0,notes:0,obsidian:false,scannedAt:'',message:String(e)}));};
   useEffect(()=>{refreshVault();window.addEventListener('focus',refreshVault);return()=>window.removeEventListener('focus',refreshVault);},[]);
@@ -62,11 +63,11 @@ export default function App() {
   };
   const savePane=async(p:PaneConfig)=>{
     const old=workspace?.panes.find(x=>x.id===p.id);if(!old)return;
-    if(orchestrate.on&&p.id===orchestrate.orchestratorPaneId&&p.type!=='claude')await orchestrateOff();
     const launchChanged=old.type!==p.type||old.cwd!==p.cwd||old.command!==p.command||JSON.stringify(old.args)!==JSON.stringify(p.args);
     const wasActive=isActive(p.id),restartable=p.type!=='powershell-admin'&&p.type!=='local-model'&&p.type!=='vault';
     if(launchChanged&&wasActive&&!window.confirm(restartable?'Apply this configuration? The current session ends and a new one starts in its place.':'Apply this configuration and stop the current session?'))return;
-    try{if(launchChanged){await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status:'idle'}}));}
+    try{if(orchestrate.on&&p.id===orchestrate.orchestratorPaneId&&p.type!=='claude')await orchestrateOff();
+      if(launchChanged){await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status:'idle'}}));}
       update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?p:x)}));setEditor(null);
       if(launchChanged&&wasActive&&restartable)setRelaunch(r=>({...r,[p.id]:(r[p.id]||0)+1}));
     }catch(e){report(String(e));}
@@ -90,23 +91,24 @@ export default function App() {
     try{await Promise.all(removed.map(async p=>{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);}));update(w=>applyPreset(w,count));setMaximized('');}catch(e){report(String(e));}
   };
   const orchestrate=workspace?.orchestrate||emptyOrchestrate();
-  const orchestrateOn=async()=>{
-    if(!workspace)return;
+  const orchestrateOn=async()=>{if(starting)return;setStarting(true);try{await orchestrateStartInner();}finally{setStarting(false);}};
+  const orchestrateStartInner=async()=>{
+    if(!workspace)return;let started=false;
     const removed=workspace.panes.slice(6);
     if(removed.length&&!window.confirm(`Orchestrate uses the 6 pane layout. This closes ${removed.length} pane${removed.length===1?'':'s'} and their sessions.`))return;
     let w=applyPreset(workspace,6,'claude');
     const focusedClaude=w.panes.find(p=>p.id===focused&&p.type==='claude'),first=w.panes.find(p=>p.type==='claude');
     const orchestrator=focusedClaude||first; if(!orchestrator){report('Orchestrate needs a Claude pane.');return;}
     if(isActive(orchestrator.id)&&!window.confirm(`${orchestrator.title} becomes the orchestrator. Its session restarts with the control channel. Continue?`))return;
-    const roles:OrchestrateRoles={workspaceId:w.id,root:orchestrator.cwd,orchestratorPaneId:orchestrator.id,workerPaneIds:w.panes.filter(p=>p.type==='claude'&&p.id!==orchestrator.id).map(p=>p.id),advisorPaneIds:w.panes.filter(p=>p.type==='local-model').map(p=>p.id),maxWorkers:orchestrate.maxWorkers,resume:orchestrate.tasks.filter(t=>t.state==='interrupted')};
+    const resume=orchestrate.tasks.filter(t=>t.state==='interrupted');
+    const roles:OrchestrateRoles={workspaceId:w.id,root:orchestrator.cwd,orchestratorPaneId:orchestrator.id,workerPaneIds:w.panes.filter(p=>p.type==='claude'&&p.id!==orchestrator.id).map(p=>p.id),advisorPaneIds:w.panes.filter(p=>p.type==='local-model').map(p=>p.id),maxWorkers:orchestrate.maxWorkers,resume};
     try{await Promise.all(removed.map(async p=>{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);}));
-      const testEnv=await window.bridge.orchestrateStart(roles);if(testEnv)(window as any).__orchestrateEnv={ALPHACODE_CONTROL_URL:testEnv.url,ALPHACODE_CONTROL_TOKEN:testEnv.token};
-      w={...w,orchestrate:{...orchestrate,on:true,orchestratorPaneId:orchestrator.id,approved:false,tasks:orchestrate.tasks.filter(t=>t.state==='interrupted')}};
-      setState(s=>s?{...s,workspaces:s.workspaces.map(x=>x.id===w.id?w:x)}:s);setMaximized('');setOrch({approved:false,tasks:w.orchestrate!.tasks,finished:''});
+      const testEnv=await window.bridge.orchestrateStart(roles);started=true;if(testEnv)(window as any).__orchestrateEnv={ALPHACODE_CONTROL_URL:testEnv.url,ALPHACODE_CONTROL_TOKEN:testEnv.token};
+      setState(s=>s?{...s,workspaces:s.workspaces.map(x=>x.id===w.id?{...x,panes:w.panes,layout:w.layout,orchestrate:{...(x.orchestrate||emptyOrchestrate()),on:true,orchestratorPaneId:orchestrator.id,approved:false,tasks:resume}}:x)}:s);setMaximized('');setOrch({approved:false,tasks:resume,finished:''});
       await window.bridge.stopSession(orchestrator.id);setRelaunch(r=>({...r,[orchestrator.id]:(r[orchestrator.id]||0)+1}));setFocused(orchestrator.id);
-    }catch(e){report(String(e));update(x=>x.orchestrate?{...x,orchestrate:{...x.orchestrate,on:false}}:x);}
+    }catch(e){if(started)await window.bridge.orchestrateStop().catch(()=>{});report(String(e));update(x=>x.orchestrate?{...x,orchestrate:{...x.orchestrate,on:false}}:x);}
   };
-  const orchestrateOff=async()=>{try{await window.bridge.orchestrateStop();}catch(e){report(String(e));}update(w=>({...w,orchestrate:{...orchestrate,on:false,approved:false,tasks:[]}}));setOrch({approved:false,tasks:[],finished:''});};
+  const orchestrateOff=async()=>{try{await window.bridge.orchestrateStop();}catch(e){report(String(e));}update(w=>({...w,orchestrate:{...(w.orchestrate||emptyOrchestrate()),on:false,approved:false,tasks:[]}}));setOrch({approved:false,tasks:[],finished:''});};
   const taskFor=(paneId:string)=>orch.tasks.find(t=>t.paneId===paneId);
   const badge=(p:PaneConfig):{cls:string;text:string}|null=>{
     if(!orchestrate.on)return null;
@@ -136,8 +138,8 @@ export default function App() {
     <header className="app-toolbar"><div className="brand"><span className="brand-mark"><Terminal size={17}/></span><strong>AlphaCode</strong></div>{!sidebar&&<><span className="toolbar-divider"/><span className="workspace-title">{workspace.name}</span></>}
       <div className="toolbar-actions"><button className="ghost" aria-label="Toggle workspace sidebar" onClick={()=>setSidebar(!sidebar)}><PanelLeft size={16}/></button><div className="presets" aria-label="Layout presets">{PRESETS.map(n=><button key={n} className={workspace.panes.length===n?'selected':''} onClick={()=>void preset(n)}>{n}<span> pane{n===1?'':'s'}</span></button>)}</div>
       <button className="ghost" aria-label={workspace.locked?'Unlock layout':'Lock layout'} title={workspace.locked?'Unlock layout':'Lock layout'} onClick={()=>update(w=>({...w,locked:!w.locked}))}>{workspace.locked?<Lock size={14}/>:<Unlock size={14}/>}<span>{workspace.locked?'Layout locked':'Layout editable'}</span></button>
-      <button className={`ghost ${orchestrate.on?'selected':''}`} aria-label={orchestrate.on?'Turn orchestrate off':'Turn orchestrate on'} title="One Claude pane plans and runs tasks in the others" onClick={()=>void (orchestrate.on?orchestrateOff():orchestrateOn())}><Workflow size={14}/><span>Orchestrate</span></button>
-      {!orchestrate.on&&<label className="max-workers" title="Most workers at once"><input aria-label="Max workers" type="number" min={1} max={5} value={orchestrate.maxWorkers} onChange={e=>update(w=>({...w,orchestrate:{...orchestrate,maxWorkers:Math.min(5,Math.max(1,Number(e.target.value)||1))}}))}/></label>}
+      <button className={`ghost ${orchestrate.on?'selected':''}`} aria-label={orchestrate.on?'Turn orchestrate off':'Turn orchestrate on'} disabled={starting} title="One Claude pane plans and runs tasks in the others" onClick={()=>void (orchestrate.on?orchestrateOff():orchestrateOn())}><Workflow size={14}/><span>Orchestrate</span></button>
+      {!orchestrate.on&&<label className="max-workers" title="Most workers at once"><input aria-label="Max workers" type="number" min={1} max={5} value={orchestrate.maxWorkers} onChange={e=>update(w=>({...w,orchestrate:{...(w.orchestrate||emptyOrchestrate()),maxWorkers:Math.min(5,Math.max(1,Number(e.target.value)||1))}}))}/></label>}
       <div className="add-menu"><button className="primary" aria-expanded={addOpen} onClick={()=>setAddOpen(!addOpen)}><Plus size={15}/>Add pane<ChevronDown size={13}/></button>{addOpen&&<div className="dropdown">{PANE_TYPES.map(t=><button key={t.type} onClick={()=>add(t.type)}><PaneIcon type={t.type} size={14}/><span>{t.label}</span></button>)}<button className="dropdown-folder" onClick={()=>void addFromFolder()}><FolderOpen size={14}/><span>Browse for a folder…</span></button></div>}</div></div>
     </header>
     {sidebar&&<aside className="sidebar"><section className="workspace-section"><div className="section-heading"><span>Workspace</span><button aria-label="Rename workspace" onClick={()=>setNameDialog('rename')}><Pencil size={12}/></button></div><select aria-label="Load workspace" value={workspace.id} onChange={e=>void switchWorkspace(e.target.value)}>{state.workspaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select><button className="project-path" onClick={()=>void chooseRoot()} title={workspace.root}><FolderOpen size={14}/><span>{workspace.root}</span></button><div className="workspace-buttons"><button onClick={()=>setNameDialog('save-as')}><Copy size={12}/>Save as</button><button aria-label="Export workspace" title="Export workspace JSON" onClick={()=>window.bridge.exportWorkspace(workspace).catch(e=>report(String(e)))}><Download size={14}/></button><button aria-label="Import workspace" title="Import workspace JSON" onClick={()=>void importLayout()}><Upload size={14}/></button></div></section>

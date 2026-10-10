@@ -7,5 +7,5 @@ const root = process.cwd(), dir = join(root, '.claude', 'worktrees', name); mkdi
 execFileSync('git', ['worktree', 'add', '-b', `task-${name.replace(/^task-/, '')}`, dir], { cwd: root, stdio: 'ignore' });
 writeFileSync(join(dir, `${name}.txt`), prompt); execFileSync('git', ['add', '.'], { cwd: dir }); execFileSync('git', ['-c', 'user.email=e2e@x', '-c', 'user.name=e2e', 'commit', '-qm', name], { cwd: dir });
 console.log(`WORKER ${name} committed`);
-execFileSync(join(process.env.ALPHACODE_RUN_DIR_SHIM || '', 'alphacode.cmd'), ['report', 'done'], { stdio: 'inherit', shell: true });
+execFileSync('cmd.exe', ['/c', join(process.env.ALPHACODE_RUN_DIR_SHIM || '', 'alphacode.cmd'), 'report', 'done'], { stdio: 'inherit' });
 setInterval(() => {}, 1000);
