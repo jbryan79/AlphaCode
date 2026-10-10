@@ -1,4 +1,4 @@
-export type PaneType = 'claude' | 'powershell' | 'powershell-admin' | 'local-model' | 'codex' | 'gemini' | 'wsl' | 'cmd' | 'git-bash' | 'custom';
+export type PaneType = 'claude' | 'powershell' | 'powershell-admin' | 'local-model' | 'vault' | 'codex' | 'gemini' | 'wsl' | 'cmd' | 'git-bash' | 'custom';
 export type PaneColor = '' | 'blue' | 'green' | 'amber' | 'purple' | 'red' | 'teal';
 export type SessionStatus = 'idle' | 'starting' | 'running' | 'busy' | 'exited' | 'error';
 export interface LocalProfile { id: string; name: string; provider: 'ollama' | 'lmstudio'; endpoint: string; model: string; systemPrompt: string; contextSize: number; temperature: number; }

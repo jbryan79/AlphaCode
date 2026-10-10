@@ -2,15 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import GridLayout, { type Layout } from 'react-grid-layout';
 import { Plus, FolderOpen, ChevronDown, GripVertical, Settings2, Maximize2, Minimize2, Copy, X, Lock, Unlock, Shield, Terminal, Cpu, PanelLeft, ArrowUp, ArrowDown, Download, Upload, Check, AlertCircle, Pencil, Brain } from 'lucide-react';
 import { addPane, applyPreset, balancedLayout, createPane, defaultState, dropTarget, duplicatePane, fillSinglePane, id, moveWorkspace, PANE_TYPES, PRESETS, removePane, reorderPane, swapPane } from '../shared/domain';
-import type { AppState, GridItem, LocalProfile, PaneConfig, PaneType, SessionEvent, SessionStatus, VaultInfo, Workspace } from '../shared/types';
+import type { AppState, GridItem, LocalProfile, PaneConfig, PaneType, SessionEvent, SessionStatus, VaultInfo, VaultTarget, Workspace } from '../shared/types';
 import TerminalPane from './TerminalPane';
 import LocalPane from './LocalPane';
+import VaultPane from './VaultPane';
 import PaneEditor from './PaneEditor';
 import ProfileEditor from './ProfileEditor';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 
-const PaneIcon=({type,size}:{type:PaneType;size:number})=>type==='powershell-admin'?<Shield size={size}/>:type==='local-model'?<Cpu size={size}/>:<Terminal size={size}/>;
+const PaneIcon=({type,size}:{type:PaneType;size:number})=>type==='powershell-admin'?<Shield size={size}/>:type==='local-model'?<Cpu size={size}/>:type==='vault'?<Brain size={size}/>:<Terminal size={size}/>;
 function NameDialog({title,initial,onSave,onClose}: {title:string;initial:string;onSave:(name:string)=>void;onClose:()=>void}) {
   const [name,setName]=useState(initial);
   return <div className="modal-backdrop"><form role="dialog" aria-modal="true" aria-label={title} className="modal small-modal" onSubmit={e=>{e.preventDefault();if(name.trim())onSave(name.trim());}}><header><h2>{title}</h2><button type="button" aria-label="Close name dialog" onClick={onClose}><X size={16}/></button></header><label>Workspace name<input autoFocus value={name} maxLength={100} onChange={e=>setName(e.target.value)}/></label><footer><button type="button" onClick={onClose}>Cancel</button><button className="primary" type="submit" disabled={!name.trim()}>Save workspace</button></footer></form></div>;
@@ -39,7 +40,7 @@ export default function App() {
   const update=(fn:(w:Workspace)=>Workspace)=>setState(s=>s?{...s,workspaces:s.workspaces.map(w=>w.id===s.activeWorkspaceId?fn(w):w)}:s);
   const getStatus=(paneId:string):SessionStatus=>statuses[paneId]?.status||'idle';
   const isActive=(paneId:string)=>['running','busy','starting'].includes(getStatus(paneId));
-  const stopAll=async()=>{if(!workspace)return;await Promise.all(workspace.panes.map(p=>p.type==='local-model'?window.bridge.cancelChat(p.id):window.bridge.stopSession(p.id)));};
+  const stopAll=async()=>{if(!workspace)return;await Promise.all(workspace.panes.map(p=>p.type==='local-model'||p.type==='vault'?window.bridge.cancelChat(p.id):window.bridge.stopSession(p.id)));};
   const switchWorkspace=async(workspaceId:string)=>{
     if(workspaceId===state?.activeWorkspaceId)return;
     if(workspace?.panes.some(p=>isActive(p.id))&&!window.confirm('Loading a workspace ends the current terminal sessions. Continue?'))return;
@@ -52,7 +53,7 @@ export default function App() {
   const savePane=async(p:PaneConfig)=>{
     const old=workspace?.panes.find(x=>x.id===p.id);if(!old)return;
     const launchChanged=old.type!==p.type||old.cwd!==p.cwd||old.command!==p.command||JSON.stringify(old.args)!==JSON.stringify(p.args);
-    const wasActive=isActive(p.id),restartable=p.type!=='powershell-admin'&&p.type!=='local-model';
+    const wasActive=isActive(p.id),restartable=p.type!=='powershell-admin'&&p.type!=='local-model'&&p.type!=='vault';
     if(launchChanged&&wasActive&&!window.confirm(restartable?'Apply this configuration? The current session ends and a new one starts in its place.':'Apply this configuration and stop the current session?'))return;
     try{if(launchChanged){await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status:'idle'}}));}
       update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?p:x)}));setEditor(null);
@@ -61,9 +62,10 @@ export default function App() {
   };
   const add=(type:PaneType,cwd?:string)=>{
     if(!workspace||workspace.panes.length>=32){report('A workspace supports up to 32 panes.');return;}
-    const base=createPane(type,cwd||workspace.root,type==='local-model'?state?.profiles[0]?.id:'');
+    const base=createPane(type,cwd||workspace.root,type==='local-model'||type==='vault'?state?.profiles[0]?.id:'');
     const pane={...base,title:cwd?.split(/[\\/]/).filter(Boolean).pop()||base.title,autoStart:false};update(w=>addPane(w,pane));setFocused(pane.id);if(!cwd)setEditor(pane);setAddOpen(false);
   };
+  const launchProject=(t:VaultTarget)=>{if(!workspace||workspace.panes.length>=32){report('A workspace supports up to 32 panes.');return;}const pane={...createPane('claude',t.path),title:t.name,autoStart:true};update(w=>addPane(w,pane));setFocused(pane.id);};
   const addFromFolder=async()=>{setAddOpen(false);try{const cwd=await window.bridge.chooseDirectory();if(cwd)add('claude',cwd);}catch(e){report(String(e));}};
   const changeFolder=async(p:PaneConfig)=>{try{const cwd=await window.bridge.chooseDirectory();if(cwd&&cwd!==p.cwd)await savePane({...p,cwd});}catch(e){report(String(e));}};
   const closeAll=async()=>{
@@ -122,7 +124,7 @@ export default function App() {
           {workspace.panes.map(p=><div key={p.id} id={`pane-${p.id}`} data-pane-id={p.id} data-pane-title={p.title} data-color={p.color||''} className={`pane ${p.type==='powershell-admin'?'admin-pane':''} ${focused===p.id?'focused':''} ${maximized===p.id?'maximized':''}`} onPointerDown={()=>{if(focused!==p.id)setFocused(p.id);}}>
             <header className="pane-header"><div className="pane-drag-handle" title={workspace.locked?'Layout locked':'Drag to arrange'}><GripVertical size={12}/><PaneIcon type={p.type} size={14}/><strong title={p.title}>{p.title}</strong></div><span className={`pane-status ${getStatus(p.id)}`} title={statuses[p.id]?.message}><span className={`status-dot ${getStatus(p.id)}`}/>{p.type==='powershell-admin'&&getStatus(p.id)==='running'?'Admin':getStatus(p.id)==='idle'?'Ready':getStatus(p.id)}</span><div className="pane-actions"><button aria-label={`Configure ${p.title}`} title="Configure and rename" onClick={()=>setEditor(p)}><Settings2 size={13}/></button><button aria-label={`Duplicate ${p.title}`} title="Duplicate configuration" onClick={()=>copyPane(p)}><Copy size={12}/></button><button aria-label={maximized===p.id?`Restore ${p.title}`:`Maximize ${p.title}`} title="Focus pane" onClick={()=>{setMaximized(maximized===p.id?'':p.id);setFocused(p.id);}}>{maximized===p.id?<Minimize2 size={13}/>:<Maximize2 size={13}/>}</button><button aria-label={`Close ${p.title}`} title="Close pane" onClick={()=>void closePane(p)}><X size={13}/></button></div></header>
             <button className="pane-directory" title={`${p.cwd}\nClick to change folder`} aria-label={`Change folder for ${p.title}`} onClick={()=>void changeFolder(p)}><FolderOpen size={11}/><span>{p.cwd}</span>{p.type==='powershell-admin'&&<span className="admin-label">UAC session</span>}</button>
-            {p.type==='local-model'?<LocalPane pane={p} profiles={state.profiles} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))}/>:<TerminalPane pane={p} status={getStatus(p.id)} focused={focused===p.id} message={statuses[p.id]?.message} relaunch={relaunch[p.id]||0} onError={report}/>}
+            {p.type==='vault'?<VaultPane pane={p} profiles={state.profiles} workspaces={state.workspaces.map(w=>({id:w.id,name:w.name}))} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))} onLaunch={launchProject} onLoadWorkspace={id=>void switchWorkspace(id)}/>:p.type==='local-model'?<LocalPane pane={p} profiles={state.profiles} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))}/>:<TerminalPane pane={p} status={getStatus(p.id)} focused={focused===p.id} message={statuses[p.id]?.message} relaunch={relaunch[p.id]||0} onError={report}/>}
           </div>)}
         </GridLayout>
       </div>

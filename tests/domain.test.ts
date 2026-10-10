@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { addPane, defaultState, createPane, dropTarget, duplicatePane, moveWorkspace, reorderPane, swapPane, applyPreset, removePane, validatePane, validateState, validateWorkspace } from '../shared/domain';
 
 describe('workspace behavior', () => {
+  it('vault panes carry a profile and never auto-start', () => {
+    const pane = createPane('vault', 'D:\\x', 'prof');
+    expect(pane.type).toBe('vault'); expect(pane.profileId).toBe('prof'); expect(pane.autoStart).toBe(false); expect(pane.title).toBe('Vault');
+  });
   it('accent color is optional, normalized, and restricted to the palette', () => {
     const legacy={...createPane('powershell','C:\\x')} as any; delete legacy.color;
     expect(validatePane(legacy).color).toBe('');

@@ -2,7 +2,7 @@ import type { AppState, GridItem, LocalProfile, PaneColor, PaneConfig, PaneType,
 
 export const PANE_TYPES: { type: PaneType; label: string }[] = [
   {type:'claude',label:'Claude'}, {type:'powershell',label:'PowerShell'}, {type:'powershell-admin',label:'PowerShell Admin'},
-  {type:'local-model',label:'Local Model'}, {type:'codex',label:'Codex'}, {type:'gemini',label:'Gemini'},
+  {type:'local-model',label:'Local Model'}, {type:'vault',label:'Vault'}, {type:'codex',label:'Codex'}, {type:'gemini',label:'Gemini'},
   {type:'wsl',label:'WSL'}, {type:'cmd',label:'CMD'}, {type:'git-bash',label:'Git Bash'}, {type:'custom',label:'Custom Command'},
 ];
 export const PANE_COLORS: { color: PaneColor; label: string }[] = [
@@ -12,7 +12,7 @@ export const PANE_COLORS: { color: PaneColor; label: string }[] = [
 export const id = () => globalThis.crypto.randomUUID();
 export const balancedLayout = (panes: PaneConfig[]): GridItem[] => panes.length===1?[{ i:panes[0].id, x:0, y:0, w:12, h:4, minW:3, minH:3 }]:panes.map((p,n) => ({ i:p.id, x:(n%2)*6, y:Math.floor(n/2)*4, w:6, h:4, minW:3, minH:3 }));
 export function createPane(type: PaneType, cwd: string, profileId = ''): PaneConfig {
-  return { id:id(), type, title:PANE_TYPES.find(t=>t.type===type)?.label || 'Terminal', cwd, command:'', args:[], profileId, color:'', autoStart:type!=='powershell-admin' && type!=='local-model' && type!=='custom' };
+  return { id:id(), type, title:PANE_TYPES.find(t=>t.type===type)?.label || 'Terminal', cwd, command:'', args:[], profileId, color:'', autoStart:type!=='powershell-admin' && type!=='local-model' && type!=='vault' && type!=='custom' };
 }
 export function defaultState(root: string): AppState {
   const profiles: LocalProfile[] = [
