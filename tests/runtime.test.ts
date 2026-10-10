@@ -134,6 +134,13 @@ describe('terminal lifecycle',()=>{
     await expect(manager.start({...pane,type:'powershell-admin'},80,24)).rejects.toThrow(/elevated helper/);
     await expect(manager.start({...pane,cwd:join(tmpdir(),'missing-'+Date.now())},80,24)).rejects.toThrow(/directory/);
   });
+  it('merges launch override env keys case-insensitively so the override PATH wins',async()=>{
+    const cwd=await mkdtemp(join(tmpdir(),'alphacode-env-'));const calls:any[]=[];const oldPath=process.env.Path;process.env.Path='C:\\Windows';
+    const factory=(file:string,args:string[],options:any)=>{calls.push(options);return {pid:1,write(){},resize(){},kill(){},onData(){return {dispose(){}};},onExit(){return {dispose(){}};}};};
+    try{const manager=new TerminalManager(factory,()=>{},()=>process.execPath);await manager.start({...pane,cwd},80,24,{env:{PATH:'D:\\run;X'}});manager.stopAll();}
+    finally{if(oldPath===undefined)delete process.env.Path;else process.env.Path=oldPath;}
+    const env=calls[0].env;expect(Object.keys(env).filter(k=>/^path$/i.test(k))).toHaveLength(1);expect(env[Object.keys(env).find(k=>/^path$/i.test(k))!]).toMatch(/^D:\\run;/);
+  });
   it('cancels pending starts and never resurrects an old session on restart',async()=>{
     const cwd=await mkdtemp(join(tmpdir(),'alphacode-pending-'));let spawns=0;
     const factory=()=>{spawns++;return {pid:1,write(){},resize(){},kill(){},onData(){return {dispose(){}};},onExit(){return {dispose(){}};}};};
