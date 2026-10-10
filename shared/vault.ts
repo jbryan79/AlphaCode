@@ -22,6 +22,25 @@ export const wikilinks = (text: string): string[] => [...new Set([...text.matchA
 export const isGenerated = (text: string): boolean => { const end = text.indexOf('\n---', 3); return text.startsWith('---') && end > 0 && text.slice(3, end).includes(MARKER); };
 export const sanitizeName = (s: string): string => s.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/^[. ]+|[. ]+$/g, '').slice(0, 100) || 'project';
 export const cwdFromTranscript = (text: string): string => { const m = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(text); if (!m) return ''; try { return JSON.parse(`"${m[1]}"`); } catch { return ''; } };
+/**
+ * Claude Code names a project folder after its working directory with `:\` as `--` and every other
+ * non-word character as `-`, so `D--Dev-pharmaco-econ` could be `D:\Dev\pharmaco-econ` or `D:\Dev\pharmaco\econ`.
+ * Walk the drive one directory at a time, preferring the longest entry name that matches, and return the
+ * real path, or '' when nothing on disk fits. `list` returns a directory's entry names or throws.
+ */
+export async function resolveSlug(slug: string, list: (dir: string) => Promise<string[]>): Promise<string> {
+  const m = /^([A-Za-z])--(.*)$/.exec(slug); if (!m) return '';
+  const drive = `${m[1].toUpperCase()}:\\`; if (!m[2]) return drive;
+  const parts = m[2].split('-'); if (parts.length > 32) return '';
+  const walk = async (dir: string, i: number): Promise<string> => {
+    if (i >= parts.length) return dir;
+    let names: string[]; try { names = await list(dir); } catch { return ''; }
+    const actual = new Map(names.map(n => [n.toLowerCase(), n]));
+    for (let j = parts.length; j > i; j--) { const name = actual.get(parts.slice(i, j).join('-').toLowerCase()); if (name) { const found = await walk(dir.endsWith('\\') ? dir + name : `${dir}\\${name}`, j); if (found) return found; } }
+    return '';
+  };
+  return walk(drive, 0);
+}
 const segments = (cwd: string) => cwd.split(/[\\/]/).filter(Boolean);
 /** Project display names: last path segment, parent appended on collision, slug when still equal. */
 export function uniqueNames(entries: { slug: string; cwd: string }[]): Map<string, string> {

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readlink, rm, rmdir, symlink, writeFile, lsta
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemoryVault } from '../electron/vault';
-import { cwdFromTranscript, homeNote, hubNote, isGenerated, parseFrontmatter, sanitizeName, uniqueNames, wikilinks, MARKER, type NoteMeta } from '../shared/vault';
+import { cwdFromTranscript, homeNote, hubNote, isGenerated, parseFrontmatter, resolveSlug, sanitizeName, uniqueNames, wikilinks, MARKER, type NoteMeta } from '../shared/vault';
 
 const note = (over: Partial<NoteMeta>): NoteMeta => ({ name: 'n', description: '', type: 'other', modified: '', project: 'P', file: '', links: [], body: '', ...over });
 
@@ -48,6 +48,17 @@ describe('vault note helpers', () => {
     expect(names.get('E--Other-AlphaCode')).toBe('AlphaCode (Other)');
     expect(names.get('B--')).toBe('B_');
     expect(names.get('no-transcript')).toBe('no-transcript');
+  });
+  it('resolves a project slug back to a real folder by walking the drive', async () => {
+    const tree: Record<string, string[]> = { 'D:\\': ['Dev', 'Other'], 'D:\\Dev': ['pharmaco-econ', 'AlphaCode', 'a'], 'D:\\Dev\\pharmaco-econ': [], 'D:\\Dev\\AlphaCode': [], 'D:\\Dev\\a': ['b-c'], 'D:\\Dev\\a\\b-c': [] };
+    const list = async (dir: string) => { if (!(dir in tree)) throw new Error('ENOENT'); return tree[dir]; };
+    expect(await resolveSlug('D--Dev-pharmaco-econ', list)).toBe('D:\\Dev\\pharmaco-econ');
+    expect(await resolveSlug('d--dev-alphacode', list)).toBe('D:\\Dev\\AlphaCode');
+    expect(await resolveSlug('D--Dev-a-b-c', list)).toBe('D:\\Dev\\a\\b-c');
+    expect(await resolveSlug('D--Dev-Missing', list)).toBe('');
+    expect(await resolveSlug('D--', list)).toBe('D:\\');
+    expect(await resolveSlug('nope', list)).toBe('');
+    expect(await resolveSlug('Z--x', list)).toBe('');
   });
   it('renders hub and home notes with the marker and path-qualified links', () => {
     const hub = hubNote('AlphaCode', [note({ name: 'a', description: 'first' }), note({ name: 'b' })], 'intro line');
@@ -138,6 +149,16 @@ describe('MemoryVault scan', () => {
     expect(await readFile(join(f.vault, 'Projects', 'AlphaCode', 'keep.md'), 'utf8')).toBe('user data');
     expect((await lstat(join(f.vault, 'Projects', 'NaviStation_JB'))).isSymbolicLink()).toBe(true);
     expect(await readFile(join(f.vault, 'Home.md'), 'utf8')).toContain('- [[Projects/weird.md|weird.md]] (1)');
+    await rm(f.root, { recursive: true, force: true });
+  });
+  it('names and locates a transcript-less project through its slug when the folder still exists', async () => {
+    const f = await fixture();
+    await mkdir(join(f.root, 'Dev', 'Resolved'), { recursive: true });
+    const slug = join(f.root, 'Dev', 'Resolved').replace(/^([A-Za-z]):\\/, '$1--').replace(/\\/g, '-');
+    await f.project(slug, null, { 'r.md': memory('name: r\ndescription: d\nmetadata:\n  type: user') });
+    await f.make().scan();
+    expect(await readFile(join(f.vault, 'Home.md'), 'utf8')).toContain('- [[Projects/Resolved|Resolved]] (1)');
+    expect(await readFile(join(f.vault, 'Projects', 'Resolved.md'), 'utf8')).toContain(`Working directory: \`${join(f.root, 'Dev', 'Resolved')}\``);
     await rm(f.root, { recursive: true, force: true });
   });
   it('shares one in-flight scan and serves info() from the last result', async () => {

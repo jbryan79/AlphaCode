@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { join, basename, dirname } from 'node:path';
 import type { LocalProfile, VaultGraph, VaultInfo, VaultTarget } from '../shared/types';
 import { validateId, validateProfile, string as str } from '../shared/domain';
-import { buildGraph, buildMessages, cwdFromTranscript, homeNote, hubNote, isGenerated, matchTargets, parseAnswer, parseFrontmatter, pickNotes, TYPES, uniqueNames, wikilinks, type NoteMeta } from '../shared/vault';
+import { buildGraph, buildMessages, cwdFromTranscript, homeNote, hubNote, isGenerated, matchTargets, parseAnswer, parseFrontmatter, pickNotes, resolveSlug, TYPES, uniqueNames, wikilinks, type NoteMeta } from '../shared/vault';
 import type { ProviderClient } from './providers';
 
 interface Project { slug: string; name: string; cwd: string; memoryDir: string; }
@@ -60,7 +60,9 @@ export class MemoryVault {
     for (const slug of slugs) {
       const dir = join(projectsDir, slug), memoryDir = join(dir, 'memory'); try { if (!(await stat(memoryDir)).isDirectory()) continue; } catch { continue; }
       let cwd = '';
-      try { const logs = await Promise.all((await readdir(dir)).filter(f => f.endsWith('.jsonl')).map(async f => ({ f, m: (await stat(join(dir, f))).mtimeMs }))); logs.sort((a, b) => b.m - a.m); for (const { f } of logs) { cwd = cwdFromTranscript(await head(join(dir, f), 65536)); if (cwd) break; } } catch { /* no transcript: slug is the name */ }
+      try { const logs = await Promise.all((await readdir(dir)).filter(f => f.endsWith('.jsonl')).map(async f => ({ f, m: (await stat(join(dir, f))).mtimeMs }))); logs.sort((a, b) => b.m - a.m); for (const { f } of logs) { cwd = cwdFromTranscript(await head(join(dir, f), 65536)); if (cwd) break; } } catch { /* no transcript */ }
+      // Claude Code prunes old transcripts; the slug plus the real disk still names most projects.
+      if (!cwd) cwd = await resolveSlug(slug, d => readdir(d));
       found.push({ slug, cwd, memoryDir });
     }
     const names = uniqueNames(found); return found.map(f => ({ ...f, name: names.get(f.slug)! }));
