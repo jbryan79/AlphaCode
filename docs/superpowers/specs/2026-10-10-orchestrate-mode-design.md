@@ -53,7 +53,7 @@ with an argument: `"D:/path/hook.cmd" stop`. The `--settings` file did not need 
 worktree. `claude -p --resume <session-id>` run from inside the worktree path resumed the
 session (it recalled its earlier reply) with cwd set to the worktree path. The interactive
 positional prompt together with `--worktree` is documented CLI behavior and is verified by the
-real run in Task 7.
+real run in Task 7. Not tested: whether `--settings` hooks run alongside the user's own settings hooks.
 
 ## The toggle
 
