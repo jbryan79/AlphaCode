@@ -8,6 +8,7 @@ import { POWERSHELL, terminalSize } from './runtime-core';
 
 export interface Terminal {pid:number;write(data:string):void;resize(cols:number,rows:number):void;kill():void;onData(callback:(data:string)=>void):{dispose():void};onExit(callback:(event:{exitCode:number;signal?:number})=>void):{dispose():void}}
 export type PtyFactory=(file:string,args:string[],options:{name:string;cols:number;rows:number;cwd:string;env:NodeJS.ProcessEnv;useConpty:boolean;useConptyDll:boolean})=>Terminal;
+export interface LaunchOverrides {env?:Record<string,string>;args?:string[];cwd?:string}
 export function resolveExecutable(pane:PaneConfig):string {
   const defaults:Partial<Record<PaneConfig['type'],string>>={powershell:POWERSHELL,claude:'claude',codex:'codex',gemini:'gemini',wsl:'wsl.exe',cmd:process.env.ComSpec||'cmd.exe','git-bash':'C:\\Program Files\\Git\\bin\\bash.exe'};
   const requested=pane.command.trim()||defaults[pane.type];
@@ -34,14 +35,14 @@ export class TerminalManager {
   private pending=new Map<string,symbol>();
   constructor(private spawn:PtyFactory,private emit:(event:SessionEvent)=>void,private resolve:(pane:PaneConfig)=>string=resolveExecutable){}
   has(paneId:string):boolean{return this.sessions.has(paneId)||this.pending.has(paneId);}
-  async start(value:PaneConfig,cols:number,rows:number):Promise<void>{
-    const pane=validatePane(value);const size=terminalSize(cols,rows);
+  async start(value:PaneConfig,cols:number,rows:number,overrides:LaunchOverrides={}):Promise<void>{
+    const pane=validatePane(value);const size=terminalSize(cols,rows);const cwd=overrides.cwd||pane.cwd;
     if(pane.type==='powershell-admin')throw new Error('Admin PowerShell requires the dedicated elevated helper.');
     if(pane.type==='local-model')throw new Error('Local model panes use the chat interface.');
     if(this.has(pane.id))return;const token=Symbol(pane.id);this.pending.set(pane.id,token);this.emit({paneId:pane.id,kind:'status',status:'starting'});
-    try{await assertDirectory(pane.cwd);if(this.pending.get(pane.id)!==token)return;const file=this.resolve(pane);const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;delete env.ALPHACODE_DATA_DIR;
-      const args=pane.args.length?pane.args:(pane.type==='powershell'?['-NoLogo','-NoProfile']:[]);
-      const launch=executableLaunch(file,args);const terminal=this.spawn(launch.file,launch.args,{name:'xterm-256color',...size,cwd:pane.cwd,env,useConpty:true,useConptyDll:true});const session={terminal,subscriptions:[] as {dispose():void}[]};this.sessions.set(pane.id,session);
+    try{await assertDirectory(cwd);if(this.pending.get(pane.id)!==token)return;const file=this.resolve(pane);const env={...process.env,...overrides.env};delete env.ELECTRON_RUN_AS_NODE;delete env.ALPHACODE_DATA_DIR;
+      const args=[...(pane.args.length?pane.args:(pane.type==='powershell'?['-NoLogo','-NoProfile']:[])),...(overrides.args||[])];
+      const launch=executableLaunch(file,args);const terminal=this.spawn(launch.file,launch.args,{name:'xterm-256color',...size,cwd,env,useConpty:true,useConptyDll:true});const session={terminal,subscriptions:[] as {dispose():void}[]};this.sessions.set(pane.id,session);
       session.subscriptions.push(terminal.onData(data=>this.emit({paneId:pane.id,kind:'data',data})),terminal.onExit(({exitCode})=>{if(this.sessions.get(pane.id)!==session)return;this.sessions.delete(pane.id);for(const subscription of session.subscriptions)subscription.dispose();this.emit({paneId:pane.id,kind:'status',status:'exited',message:`Process exited (${exitCode}).`});}));
       this.emit({paneId:pane.id,kind:'status',status:'running',pid:terminal.pid,elevated:false});
     }catch(error){if(this.pending.get(pane.id)===token)this.emit({paneId:pane.id,kind:'status',status:'error',message:(error as Error).message});throw error;}finally{if(this.pending.get(pane.id)===token)this.pending.delete(pane.id);}

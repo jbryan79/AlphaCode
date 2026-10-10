@@ -90,3 +90,52 @@ describe('persistence', () => {
     expect(applyPreset({ ...ws, panes: [], layout: [] }, 4).panes.every(p => p.type === 'powershell')).toBe(true);
   });
 });
+
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { OrchestrateRun, type RunDeps } from '../electron/orchestrate';
+import type { OrchestrateEvent, PaneConfig } from '../shared/types';
+
+const pane = (id: string, type: PaneConfig['type'] = 'claude', over: Partial<PaneConfig> = {}): PaneConfig => ({ id, type, title: id, cwd: 'D:\\Dev\\repo', command: '', args: [], profileId: '', color: '', autoStart: true, ...over });
+async function fixture(over: Partial<RunDeps> = {}) {
+  const runDir = await mkdtemp(join(tmpdir(), 'alphacode-orch-'));
+  const events: OrchestrateEvent[] = [], gits: string[][] = [], launches: string[] = [], chats: string[] = [], finishes: string[] = [];
+  const deps: RunDeps = {
+    runDir, execPath: 'C:\\App\\AlphaCode.exe', cliPath: 'C:\\App\\dist-electron\\electron\\cli.js', playbookPath: 'C:\\Data\\orchestrate.md',
+    roles: { workspaceId: 'w', root: 'D:\\Dev\\repo', orchestratorPaneId: 'p1', workerPaneIds: ['p2', 'p3'], advisorPaneIds: ['p4'], maxWorkers: 5 },
+    panes: () => [pane('p1'), pane('p2'), pane('p3'), pane('p4', 'local-model')],
+    git: async args => { gits.push(args); if (args[0] === 'status') return ''; if (args[0] === 'rev-parse') return 'true\n'; if (args[0] === 'worktree') return 'worktree D:/Dev/repo\nbranch refs/heads/main\n\nworktree D:/Dev/repo/.claude/worktrees/task-api\nbranch refs/heads/task-api\n\n'; return ''; },
+    launch: async id => { launches.push(id); }, chat: async (_id, prompt) => { chats.push(prompt); return 'advice'; },
+    finish: async report => { finishes.push(report); }, emit: e => events.push(e), log: () => {}, ...over,
+  };
+  const run = new OrchestrateRun(deps); await run.start();
+  return { run, runDir, events, gits, launches, chats, finishes, deps };
+}
+
+describe('OrchestrateRun launch overrides', () => {
+  it('gives the orchestrator the control env, playbook and name, and puts the shim folder first on PATH', async () => {
+    const f = await fixture();
+    const o = f.run.overrides('p1')!;
+    expect(o.env!.ALPHACODE_CONTROL_URL).toBe(`http://127.0.0.1:${f.run.port}`); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBe(f.run.controlToken); expect(o.env!.ALPHACODE_RUN_DIR).toBe(f.runDir);
+    expect(o.env!.PATH!.split(';')[0]).toBe(f.runDir); expect(o.args).toEqual(['--append-system-prompt-file', 'C:\\Data\\orchestrate.md', '--name', 'Orchestrator']);
+    expect(o.env!.ALPHACODE_HOOK_TOKEN).toBeUndefined();
+    expect(f.run.overrides('p1')).toEqual(o); // stable across restarts in the same run
+    expect(f.run.overrides('p4')).toBeNull(); expect(f.run.overrides('p2')).toBeNull(); // idle worker gets nothing
+    const shim = await readFile(join(f.runDir, 'alphacode.cmd'), 'utf8');
+    expect(shim).toContain('ELECTRON_RUN_AS_NODE=1'); expect(shim).toContain('"C:\\App\\AlphaCode.exe" "C:\\App\\dist-electron\\electron\\cli.js" %*');
+    await f.run.stop(); await expect(stat(f.runDir)).rejects.toThrow();
+  });
+  it('seeds interrupted tasks from the saved workspace so the new run can list and retry them', async () => {
+    const interrupted = task({ id: 'old', state: 'interrupted', paneId: 'p3', sessionId: 'abc', worktree: 'D:/Dev/repo/.claude/worktrees/task-old', branch: 'task-old' });
+    const f = await fixture({ roles: { workspaceId: 'w', root: 'D:\\Dev\\repo', orchestratorPaneId: 'p1', workerPaneIds: ['p2', 'p3'], advisorPaneIds: ['p4'], maxWorkers: 5, resume: [interrupted, task({ id: 'stray', state: 'interrupted', paneId: 'p9' })] } });
+    expect(f.run.tasks().map(t => [t.id, t.state])).toEqual([['old', 'interrupted']]); expect(f.run.overrides('p3')).toBeNull();
+    await f.run.stop();
+  });
+  it('tracks the last 20 ANSI-stripped lines per pane within 4 KB', async () => {
+    const f = await fixture();
+    for (let i = 0; i < 300; i++) f.run.tap('p2', `\x1b[32mline ${i}\x1b[0m\r\n`);
+    const lines = f.run.lastLines('p2'); expect(lines).toHaveLength(20); expect(lines[19]).toBe('line 299'); expect(lines[0]).toBe('line 280');
+    await f.run.stop();
+  });
+});
