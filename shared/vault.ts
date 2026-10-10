@@ -35,4 +35,45 @@ const link = (n: NoteMeta) => `[[Projects/${n.project}/${n.name}|${n.name}]]`;
 export const hubNote = (title: string, notes: NoteMeta[], intro = ''): string => `---\n${MARKER}\n---\n# ${title}\n${intro ? `\n${intro}\n` : ''}\n${notes.map(n => `- ${link(n)} - ${n.description}`).join('\n')}\n`;
 export const homeNote = (projects: { name: string; count: number }[], types: { type: string; count: number }[], projectsDir: string, scannedAt: string): string =>
   `---\n${MARKER}\n---\n# Home\n\n## Projects\n${projects.length ? projects.map(p => `- [[Projects/${p.name}|${p.name}]] (${p.count})`).join('\n') : '- No memories yet. Work with Claude in an AlphaCode pane and they appear here.'}\n\n## Types\n${types.map(t => `- [[Types/${t.type}|${t.type}]] (${t.count})`).join('\n')}\n\nClaude projects: \`${projectsDir}\` · scanned ${scannedAt}\n`;
+
+const STOP = new Set('the and for that this with what how did does about from have are was were you your can not but all any when where which who why will into out its our they them then than also just more some should would could there their been has had one two use used using tell show give know want need'.split(' '));
+export const tokens = (q: string): string[] => [...new Set(q.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length >= 3 && !STOP.has(t)))];
+export const scoreNote = (n: NoteMeta, toks: string[]): number => { const name = n.name.toLowerCase(), desc = n.description.toLowerCase(), body = n.body.toLowerCase(); return toks.reduce((s, t) => s + (name.includes(t) ? 3 : 0) + (desc.includes(t) ? 2 : 0) + (body.includes(t) ? 1 : 0), 0); };
+/** Top `max` positively scored notes whose bodies fit in `budget` characters; newer and alphabetically earlier notes break ties. */
+export function pickNotes(notes: NoteMeta[], question: string, max = 8, budget = 24000): NoteMeta[] {
+  const toks = tokens(question);
+  const scored = notes.map(n => ({ n, s: scoreNote(n, toks) })).filter(x => x.s > 0).sort((a, b) => b.s - a.s || b.n.modified.localeCompare(a.n.modified) || a.n.name.localeCompare(b.n.name));
+  const out: NoteMeta[] = []; let size = 0;
+  for (const { n } of scored) { if (out.length >= max) break; if (size + n.body.length > budget) continue; out.push(n); size += n.body.length; }
+  return out;
+}
+export const SYSTEM = 'You answer questions about the user\'s own notes. Use only the notes provided. If they do not cover the question, say so plainly. End your reply with one line "Notes used: name, name" naming only the notes you relied on, or "Notes used: none".';
+export function buildMessages(context: NoteMeta[], question: string): ChatMessage[] {
+  const notes = context.length ? context.map(n => `### ${n.name} (${n.project}, ${n.type})\n${n.body.trim()}`).join('\n\n') : '(No notes in the vault match this question.)';
+  return [{ role: 'system', content: SYSTEM }, { role: 'user', content: `${notes}\n\n---\nQuestion: ${question}` }];
+}
+export function parseAnswer(text: string, contextNames: string[]): { answer: string; notes: string[] } {
+  const m = /\n?\s*notes used:\s*(.*)\s*$/i.exec(text);
+  if (!m) return { answer: text.trim(), notes: contextNames };
+  const named = m[1].split(/[,;]/).map(s => s.trim().replace(/^\[\[|\]\]$/g, '').toLowerCase()).filter(Boolean);
+  return { answer: text.slice(0, m.index).trim(), notes: contextNames.filter(c => named.includes(c.toLowerCase())) };
+}
+export const COMMAND = /^\s*(launch|open|start)\s+(.+?)\s*$/i;
+export const nameKey = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+/** Per kind, only the best tier survives: exact beats prefix beats contains. */
+export function matchTargets(query: string, candidates: VaultTarget[]): VaultTarget[] {
+  const q = nameKey(query); if (!q) return [];
+  const tier = (c: VaultTarget) => { const k = nameKey(c.name); return k === q ? 0 : k.startsWith(q) ? 1 : k.includes(q) ? 2 : 3; };
+  const out: VaultTarget[] = [];
+  for (const kind of ['project', 'obsidian', 'workspace'] as const) { const mine = candidates.filter(c => c.kind === kind).map(c => ({ c, t: tier(c) })).filter(x => x.t < 3), best = Math.min(...mine.map(x => x.t)); out.push(...mine.filter(x => x.t === best).map(x => x.c)); }
+  return out;
+}
+export function buildGraph(notes: NoteMeta[]): VaultGraph {
+  const hubs = [...new Set(notes.map(n => n.project))].map(p => ({ id: `hub:${p}`, label: p, project: p, type: 'hub' }));
+  const nodes = [...hubs, ...notes.map(n => ({ id: `${n.project}/${n.name}`, label: n.name, project: n.project, type: n.type }))];
+  const byName = new Map<string, string[]>(); for (const n of notes) byName.set(n.name, [...(byName.get(n.name) || []), `${n.project}/${n.name}`]);
+  const edges: { from: string; to: string }[] = [];
+  for (const n of notes) { const id = `${n.project}/${n.name}`; edges.push({ from: id, to: `hub:${n.project}` }); for (const l of n.links) { const t = byName.get(l) || [], to = t.find(x => x.startsWith(`${n.project}/`)) || t[0]; if (to && to !== id) edges.push({ from: id, to }); } }
+  return { nodes, edges };
+}
 export type { ChatMessage, VaultGraph, VaultTarget };
