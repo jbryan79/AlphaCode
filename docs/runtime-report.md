@@ -64,6 +64,10 @@ The steps below have not been run. They need a person at the keyboard to answer 
 8. On a second attempt, restart the orchestrator pane by hand mid-run. Confirm it relaunches with the playbook and the tasks survive.
 9. Confirm that each worker's branch, as shown in the Tasks section, is named `worktree-task-<id>`.
 10. Confirm that Stop or Notification hooks in `~/.claude/settings.json` still run alongside the `--settings` hooks. This coexistence is untested.
+11. Confirm that the Tasks row shows the worker's branch within a few seconds of `task start` (the lookup repeats on reports and status calls until Claude has created the worktree).
+12. Confirm that a worker can run `alphacode report done` from its Bash tool (Git Bash finds the extensionless `alphacode` shim in the run folder).
+13. Confirm that `alphacode task retry` into a live worker actually submits the feedback (text and Enter are sent as separate writes about 100 ms apart).
+14. In the same mode session, make a second request after the first run finishes. Confirm that the orchestrator asks for "go" again before starting workers, and that `alphacode finish` works a second time.
 
 ### Not verified
 

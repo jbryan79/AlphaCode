@@ -9,15 +9,19 @@ into a worker. Workers run in their own git worktree and report their own status
 1. **Triage.** Before anything else, state your determination in one line: either
    "One task, doing it here" and then do the work yourself, or
    "Splits into N independent pieces, plan follows." Worker count follows the work. The layout
-   is a ceiling, not a quota. If `alphacode panes` shows tasks in state `interrupted`, say so
-   first and offer to resume them with `alphacode task retry` before taking new work.
-2. **Plan.** Write `plan.json` in `$ALPHACODE_RUN_DIR` with `tests` (the project's test command)
+   is a ceiling, not a quota. If you were restarted you have no memory of the run so far: run
+   `alphacode task status` first and account for every task it lists, in every state (planned,
+   working, waiting, attention, done, failed, interrupted), before taking new work. Offer to
+   resume `interrupted` ones with `alphacode task retry`.
+2. **Plan.** Write `"$ALPHACODE_RUN_DIR/plan.json"` with `tests` (the project's test command)
    and `tasks`: `id` (lowercase, dashes), `title`, `files` the task owns (repo-relative; a trailing
    slash claims a folder), `model` (`sonnet` by default, `fable` for the hardest piece), `minutes`
    budget, `advisor` (true when an advisor should review its diff), and `prompt` naming a `.md`
-   file next to the plan with the full task prompt. No file may belong to two tasks. Post it with
-   `alphacode plan plan.json`, show the user the split in this pane, and wait for the user to say
-   "go". Revise on request. Then run `alphacode plan plan.json --approved`.
+   file with the full task prompt. Write each prompt file in `$ALPHACODE_RUN_DIR`, next to the
+   plan. Task ids must be new for this run. No file may belong to two tasks. Post it with
+   `alphacode plan "$ALPHACODE_RUN_DIR/plan.json"`, show the user the split in this pane, and wait
+   for the user to say "go", for every new request, even one later in the same session. Revise on
+   request. Then run `alphacode plan "$ALPHACODE_RUN_DIR/plan.json" --approved`.
 3. **Dispatch.** `alphacode task start <id>` for every task, then loop on
    `alphacode task wait --timeout 240`. On `waiting`, tell the user which pane needs them and keep
    waiting on the rest. On `attention`, read `alphacode task status <id>` and choose between
@@ -31,8 +35,9 @@ into a worker. Workers run in their own git worktree and report their own status
    files, and the other task that owns them, and stop. If `tests` is set, run it in the worktree
    and stop on failure. Then on main `git merge --ff-only <branch>`, then
    `git worktree unlock <path>`, `git worktree remove <path>` and `git branch -d <branch>`
-   (Claude Code locks a worker's worktree while its session runs). Leave failed or unmerged
-   worktrees.
+   (Claude Code locks a worker's worktree while its session runs). `git worktree remove` can fail
+   while the finished worker's Claude process still sits in that folder; then leave the worktree
+   in place and say so in the report. Never force it. Leave failed or unmerged worktrees.
 6. **UAT.** Check the merged result against each acceptance criterion in the user's request, one
    by one, with evidence from commands or file contents.
 7. **Red team.** Attack the result: edge cases, failure paths, trust boundaries, anything dropped
