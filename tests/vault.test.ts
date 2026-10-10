@@ -50,11 +50,13 @@ describe('vault note helpers', () => {
     expect(names.get('no-transcript')).toBe('no-transcript');
   });
   it('resolves a project slug back to a real folder by walking the drive', async () => {
-    const tree: Record<string, string[]> = { 'D:\\': ['Dev', 'Other'], 'D:\\Dev': ['pharmaco-econ', 'AlphaCode', 'a'], 'D:\\Dev\\pharmaco-econ': [], 'D:\\Dev\\AlphaCode': [], 'D:\\Dev\\a': ['b-c'], 'D:\\Dev\\a\\b-c': [] };
+    const tree: Record<string, string[]> = { 'D:\\': ['Dev', 'Other'], 'D:\\Dev': ['pharmaco-econ', 'AlphaCode', 'a'], 'D:\\Dev\\pharmaco-econ': [], 'D:\\Dev\\AlphaCode': [], 'D:\\Dev\\a': ['b-c'], 'D:\\Dev\\a\\b-c': [], 'B:\\': ['EZ-CAP_DatabaseSchema_JB', 'My Notes'], 'B:\\EZ-CAP_DatabaseSchema_JB': [], 'B:\\My Notes': [] };
     const list = async (dir: string) => { if (!(dir in tree)) throw new Error('ENOENT'); return tree[dir]; };
     expect(await resolveSlug('D--Dev-pharmaco-econ', list)).toBe('D:\\Dev\\pharmaco-econ');
     expect(await resolveSlug('d--dev-alphacode', list)).toBe('D:\\Dev\\AlphaCode');
     expect(await resolveSlug('D--Dev-a-b-c', list)).toBe('D:\\Dev\\a\\b-c');
+    expect(await resolveSlug('B--EZ-CAP-DatabaseSchema-JB', list)).toBe('B:\\EZ-CAP_DatabaseSchema_JB');
+    expect(await resolveSlug('B--My-Notes', list)).toBe('B:\\My Notes');
     expect(await resolveSlug('D--Dev-Missing', list)).toBe('');
     expect(await resolveSlug('D--', list)).toBe('D:\\');
     expect(await resolveSlug('nope', list)).toBe('');

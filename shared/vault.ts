@@ -35,7 +35,9 @@ export async function resolveSlug(slug: string, list: (dir: string) => Promise<s
   const walk = async (dir: string, i: number): Promise<string> => {
     if (i >= parts.length) return dir;
     let names: string[]; try { names = await list(dir); } catch { return ''; }
-    const actual = new Map(names.map(n => [n.toLowerCase(), n]));
+    // Underscores, spaces and every other non-word character also became '-' in the slug, so compare normalized names.
+    const key = (n: string) => n.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    const actual = new Map(names.map(n => [key(n), n]));
     for (let j = parts.length; j > i; j--) { const name = actual.get(parts.slice(i, j).join('-').toLowerCase()); if (name) { const found = await walk(dir.endsWith('\\') ? dir + name : `${dir}\\${name}`, j); if (found) return found; } }
     return '';
   };
