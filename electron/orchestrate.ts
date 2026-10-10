@@ -86,9 +86,9 @@ export class OrchestrateRun {
     try { await this.deps.git(['rev-parse', '--is-inside-work-tree'], roles.root); } catch { this.err(400, `${roles.root} is not a git repository; Orchestrate needs one for worktrees`); }
     if ((await this.deps.git(['status', '--porcelain'], roles.root)).split(/\r?\n/).some(l => l && !l.startsWith('??'))) this.err(400, 'The git index is not clean; commit or stash before planning');
     const kept = new Map([...this.live.entries()].filter(([, l]) => l.task.state !== 'planned'));
-    const free = workers.filter(id => !kept.has(id)); this.live = kept;
-    for (const pt of plan.tasks) { if ([...kept.values()].some(l => l.task.id === pt.id)) continue; const paneId = free.shift(); if (!paneId) this.err(409, 'No free worker pane for the plan'); const { prompt, ...rest } = pt; const task: Task = { ...rest, state: 'planned', paneId, branch: '', worktree: '', startedAt: '', finishedAt: '', retries: 0, sessionId: '', message: '', hidden: false }; this.live.set(paneId, this.mintTask(task, prompt)); }
-    this.plan = { ...plan, approved: plan.approved || this.plan?.approved === true }; this.bump();
+    const free = workers.filter(id => !kept.has(id));
+    for (const pt of plan.tasks) { if ([...kept.values()].some(l => l.task.id === pt.id)) continue; const paneId = free.shift(); if (!paneId) this.err(409, 'No free worker pane for the plan'); const { prompt, ...rest } = pt; const task: Task = { ...rest, state: 'planned', paneId, branch: '', worktree: '', startedAt: '', finishedAt: '', retries: 0, sessionId: '', message: '', hidden: false }; kept.set(paneId, this.mintTask(task, prompt)); }
+    this.live = kept; this.plan ={ ...plan, approved: plan.approved || this.plan?.approved === true }; this.bump();
     return { ...this.plan, tasks: this.tasks() };
   }
   private async launchPane(l: Live, signal: Signal): Promise<Task> {
@@ -107,15 +107,18 @@ export class OrchestrateRun {
   private async startTask(id: string): Promise<Task> {
     const t = this.find(id); const l = this.live.get(t.paneId)!; if (!this.plan?.approved) this.err(409, 'The plan is not approved yet');
     if (t.state === 'attention' || t.state === 'failed' || t.state === 'interrupted') this.err(409, `Task ${id} is ${t.state}; use retry`);
+    if (this.launching.has(t.paneId)) this.err(409, `Pane ${t.paneId} is already launching`); if (!transition(t.state, 'start')) this.err(409, `Task ${id} is ${t.state}`);
     t.sessionId = this.uuid(); t.startedAt = new Date(this.now()).toISOString(); t.finishedAt = ''; t.retries = 0; t.message = ''; t.hidden = false;
     return this.launchPane(l, 'start');
   }
   private async retry(id: string, body: any): Promise<Task> {
     const t = this.find(id); const l = this.live.get(t.paneId)!; const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : ''; if (!feedback || feedback.length > 65536) this.err(400, 'feedback is required (1 to 65536 characters)');
     if (!transition(t.state, 'retry')) this.err(409, `Task ${id} is ${t.state}`); if (t.retries >= 2) this.err(409, `Task ${id} already retried twice`);
+    const alive = this.alive(t.paneId);
+    if (!alive) { if (!t.sessionId || !t.worktree) this.err(409, `Task ${id} has no session to resume`); if (this.launching.has(t.paneId)) this.err(409, `Pane ${t.paneId} is already launching`); }
+    if (alive) this.writer(t.paneId, feedback.replace(/[\r\n]+/g, ' ').replace(/[\x00-\x1f\x7f]/g, '') + '\r');
     t.retries++; t.message = ''; t.finishedAt = '';
-    if (this.alive(t.paneId)) { this.writer(t.paneId, feedback.replace(/\r?\n/g, ' ') + '\r'); this.signal(t.paneId, 'retry'); return t; }
-    if (!t.sessionId || !t.worktree) this.err(409, `Task ${id} has no session to resume`);
+    if (alive) { this.signal(t.paneId, 'retry'); return t; }
     l.prompt = feedback; return this.launchPane(l, 'retry');
   }
   private report(paneId: string, b: any): Task | null {
@@ -128,9 +131,10 @@ export class OrchestrateRun {
     const want = ids ? ids.split(',').map(s => s.trim()).filter(Boolean) : this.tasks().map(t => t.id); for (const id of want) this.find(id);
     const pick = () => this.tasks().filter(t => want.includes(t.id)); const snapshot = JSON.stringify(pick().map(t => [t.id, t.state, t.retries])); const ms = Math.max(0, Math.min(240, Number.isFinite(timeout) ? timeout : 240)) * 1000;
     return new Promise(resolve => {
-      const done = (changed: boolean) => { clearTimeout(timer); this.waiters = this.waiters.filter(w => w !== check); resolve({ changed, tasks: pick() }); };
-      const check = () => { if (JSON.stringify(pick().map(t => [t.id, t.state, t.retries])) !== snapshot || !this.server) done(JSON.stringify(pick().map(t => [t.id, t.state, t.retries])) !== snapshot); };
-      const timer = setTimeout(() => done(false), ms); this.waiters.push(check);
+      const changed = () => JSON.stringify(pick().map(t => [t.id, t.state, t.retries])) !== snapshot;
+      const done = () => { clearTimeout(timer); this.waiters = this.waiters.filter(w => w !== check); resolve({ changed: changed(), tasks: pick() }); };
+      const check = () => { if (changed() || !this.server) done(); else this.waiters.push(check); };
+      const timer = setTimeout(done, ms); this.waiters.push(check);
     });
   }
   private async ask(paneId: string, body: any): Promise<{ answer: string }> {
@@ -140,7 +144,7 @@ export class OrchestrateRun {
   }
   private async finish(body: any): Promise<{ summary: string }> {
     if (this.finished) this.err(409, 'This run already finished'); const report: string = typeof body.report === 'string' ? body.report.trim() : ''; if (!report || report.length > 1048576) this.err(400, 'report is required');
-    const summary = report.split(/\r?\n/).map(l => l.replace(/^#+\s*/, '').trim()).filter(l => l && !/^report$/i.test(l))[0] || 'Finished'; this.finished = true;
+    const summary = report.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#') && !/^report$/i.test(l))[0] || 'Finished'; this.finished = true;
     await this.deps.finish(report, summary.slice(0, 200), { tasks: this.tasks(), plan: this.plan }); this.deps.emit({ kind: 'finished', summary: summary.slice(0, 200) }); return { summary };
   }
   protected signal(paneId: string, signal: Signal, message = ''): Task | null { const l = this.live.get(paneId); if (!l) return null; const next = transition(l.task.state, signal); if (!next) return null; l.task.state = next; if (message) l.task.message = message; if (next === 'done' || next === 'failed') l.task.finishedAt = new Date(this.now()).toISOString(); if (next === 'working') l.task.hidden = false; this.bump(); return l.task; }

@@ -191,8 +191,9 @@ describe('control server', () => {
     await call(f.run, f.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
     const first = call(f.run, f.run.controlToken, 'POST', '/tasks/api/start');
     await new Promise(r => setTimeout(r, 20));
-    expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409);
-    const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2'));
+    const sid = f.run.tasks()[0].sessionId; expect(sid).not.toBe('');
+    expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409); expect(f.run.tasks()[0].sessionId).toBe(sid);
+    const o =f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2'));
     release(); expect((await first).status).toBe(200);
     const bad = await fixture({ launch: async () => { throw new Error('Cannot find claude'); } });
     await call(bad.run, bad.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
@@ -255,6 +256,49 @@ describe('control server', () => {
     const fin = await call(f.run, f.run.controlToken, 'POST', '/finish', { report: '# Report\nAll good.' });
     expect(fin.status).toBe(200); expect(f.finishes).toEqual(['# Report\nAll good.']); expect(f.events.at(-1)).toEqual({ kind: 'finished', summary: 'All good.' });
     expect((await call(f.run, f.run.controlToken, 'POST', '/finish', { report: 'again' })).status).toBe(409);
+    await f.run.stop();
+  });
+});
+
+describe('control server fixes', () => {
+  const C = (f: Awaited<ReturnType<typeof fixture>>) => f.run.controlToken;
+  it('wait keeps its subscription across unrelated bumps and reports the change', async () => {
+    const f = await fixture();
+    await call(f.run, C(f), 'POST', '/plan', { ...planBody, approved: true });
+    await call(f.run, C(f), 'POST', '/tasks/api/start'); await call(f.run, C(f), 'POST', '/tasks/ui/start');
+    const t0 = Date.now(), waiting = call(f.run, C(f), 'GET', '/tasks/wait?ids=api&timeout=20');
+    await new Promise(r => setTimeout(r, 30)); f.run.exited('p3');
+    await new Promise(r => setTimeout(r, 30)); f.run.exited('p2');
+    const w = await waiting; expect(w.body.changed).toBe(true); expect(w.body.tasks[0].state).toBe('failed'); expect(Date.now() - t0).toBeLessThan(3000);
+    await f.run.stop();
+  });
+  it('retry guards run before mutating and typed feedback is sanitized', async () => {
+    const typed: string[] = []; const f = await fixture(); f.run.writer = (_id, d) => { typed.push(d); }; f.run.alive = () => false;
+    await call(f.run, C(f), 'POST', '/plan', { ...planBody, approved: true });
+    await call(f.run, C(f), 'POST', '/tasks/api/start');
+    f.run.exited('p2');
+    const live = (f.run as any).live.get('p2'); live.task.worktree = '';
+    const r = await call(f.run, C(f), 'POST', '/tasks/api/retry', { feedback: 'x' });
+    expect(r.status).toBe(409); expect(f.run.tasks()[0].retries).toBe(0);
+    live.task.state = 'attention'; f.run.alive = () => true;
+    expect((await call(f.run, C(f), 'POST', '/tasks/api/retry', { feedback: 'a\rb\x1b[Ac\n' })).status).toBe(200);
+    expect(typed).toEqual(['a b[Ac\r']);
+    await f.run.stop();
+  });
+  it('a plan that runs out of panes leaves the previous state intact', async () => {
+    const f = await fixture();
+    await call(f.run, C(f), 'POST', '/plan', { ...planBody, approved: true });
+    await call(f.run, C(f), 'POST', '/tasks/api/start'); await call(f.run, C(f), 'POST', '/tasks/ui/start');
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    const before = f.run.tasks();
+    const t = (id: string) => ({ ...planBody.tasks[0], id, files: [`src/${id}/`] });
+    expect((await call(f.run, C(f), 'POST', '/plan', { tests: 'npm test', tasks: [t('n1'), t('n2')] })).status).toBe(409);
+    expect(f.run.tasks()).toEqual(before);
+    await f.run.stop();
+  });
+  it('finish skips heading lines for the summary', async () => {
+    const f = await fixture();
+    expect((await call(f.run, C(f), 'POST', '/finish', { report: '# Overview\n\nAll good.' })).body).toEqual({ summary: 'All good.' });
     await f.run.stop();
   });
 });
