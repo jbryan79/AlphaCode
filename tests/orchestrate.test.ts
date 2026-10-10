@@ -139,3 +139,122 @@ describe('OrchestrateRun launch overrides', () => {
     await f.run.stop();
   });
 });
+
+async function call(run: OrchestrateRun, token: string, method: string, path: string, body?: unknown) {
+  const r = await fetch(`http://127.0.0.1:${run.port}${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  return { status: r.status, body: await r.json() as any };
+}
+const planBody = { tests: 'npm test', tasks: [{ id: 'api', title: 'API', files: ['electron/api.ts'], model: 'sonnet', minutes: 20, advisor: true, prompt: 'Build the endpoint.' }, { id: 'ui', title: 'UI', files: ['src/'], model: 'fable', minutes: 30, advisor: false, prompt: 'Build the screen.' }] };
+
+describe('control server', () => {
+  it('rejects missing, wrong-class and foreign tokens', async () => {
+    const f = await fixture();
+    expect((await call(f.run, '', 'GET', '/panes')).status).toBe(401);
+    expect((await call(f.run, 'x'.repeat(64), 'GET', '/panes')).status).toBe(401);
+    await call(f.run, f.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
+    await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start');
+    const hook = f.run.hookTokenFor('p2');
+    expect((await call(f.run, hook, 'GET', '/panes')).status).toBe(401);
+    expect((await call(f.run, f.run.controlToken, 'POST', '/report', { paneId: 'p2', kind: 'done' })).status).toBe(401);
+    expect((await call(f.run, hook, 'POST', '/report', { paneId: 'p3', kind: 'done' })).status).toBe(401);
+    expect(f.run.tasks().find(t => t.id === 'api')!.state).toBe('working');
+    await f.run.stop();
+  });
+  it('lists panes with roles and task states', async () => {
+    const f = await fixture();
+    const r = await call(f.run, f.run.controlToken, 'GET', '/panes');
+    expect(r.status).toBe(200); expect(r.body.map((p: any) => [p.id, p.role])).toEqual([['p1', 'orchestrator'], ['p2', 'worker'], ['p3', 'worker'], ['p4', 'advisor']]);
+    expect(r.body[1]).toMatchObject({ title: 'p2', type: 'claude', cwd: 'D:\\Dev\\repo', task: null });
+    await f.run.stop();
+  });
+  it('validates the plan, requires a clean git index, assigns panes in order and gates start on approval', async () => {
+    const f = await fixture();
+    expect((await call(f.run, f.run.controlToken, 'POST', '/plan', { tasks: [] })).status).toBe(400);
+    const dirty = await fixture({ git: async args => args[0] === 'status' ? ' M a.ts\n' : 'true\n' });
+    expect((await call(dirty.run, dirty.run.controlToken, 'POST', '/plan', planBody)).body.error).toMatch(/clean/); await dirty.run.stop();
+    const notGit = await fixture({ git: async () => { throw new Error('fatal: not a git repository'); } });
+    expect((await call(notGit.run, notGit.run.controlToken, 'POST', '/plan', planBody)).body.error).toMatch(/git repository/); await notGit.run.stop();
+    const ok = await call(f.run, f.run.controlToken, 'POST', '/plan', planBody);
+    expect(ok.status).toBe(200); expect(ok.body.approved).toBe(false); expect(ok.body.tasks.map((t: any) => [t.id, t.paneId, t.state])).toEqual([['api', 'p2', 'planned'], ['ui', 'p3', 'planned']]);
+    expect(f.events.at(-1)).toMatchObject({ kind: 'tasks', approved: false });
+    expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409);
+    f.run.approve(); expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(200);
+    expect(f.launches).toEqual(['p2']); expect(f.run.tasks()[0]).toMatchObject({ state: 'working', branch: 'task-api', worktree: 'D:/Dev/repo/.claude/worktrees/task-api' });
+    expect(f.run.tasks()[0].sessionId).toMatch(/^[0-9a-f-]{36}$/); expect(f.run.tasks()[0].startedAt).not.toBe('');
+    const hooks = JSON.parse(await readFile(join(f.runDir, 'hooks-p2.json'), 'utf8'));
+    expect(hooks.hooks.Stop[0].hooks[0].command).toMatch(/alphacode\.cmd" report stop$/); expect(hooks.hooks.Notification[0].hooks[0].command).toMatch(/report waiting$/);
+    expect(f.run.overrides('p2')).toBeNull(); // launch completed: no more overrides until a retry
+    await f.run.stop();
+  });
+  it('refuses a second start while a launch is in flight and fails the task when the launch rejects', async () => {
+    let release = () => {}; const f = await fixture({ launch: () => new Promise<void>(r => { release = r; }) });
+    await call(f.run, f.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
+    const first = call(f.run, f.run.controlToken, 'POST', '/tasks/api/start');
+    await new Promise(r => setTimeout(r, 20));
+    expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409);
+    const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2'));
+    release(); expect((await first).status).toBe(200);
+    const bad = await fixture({ launch: async () => { throw new Error('Cannot find claude'); } });
+    await call(bad.run, bad.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
+    const r = await call(bad.run, bad.run.controlToken, 'POST', '/tasks/api/start');
+    expect(r.status).toBe(500); expect(bad.run.tasks()[0]).toMatchObject({ state: 'failed', message: 'Cannot find claude' });
+    await f.run.stop(); await bad.run.stop();
+  });
+  it('applies hook reports, ignores repeats, and reports status with the last lines', async () => {
+    const f = await fixture();
+    await call(f.run, f.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
+    await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start');
+    const hook = f.run.hookTokenFor('p2'), report = (kind: string, extra = {}) => call(f.run, hook, 'POST', '/report', { paneId: 'p2', kind, ...extra });
+    expect((await report('waiting', { notificationType: 'permission_prompt' })).status).toBe(200); expect(f.run.tasks()[0].state).toBe('waiting');
+    expect((await report('stop')).status).toBe(200); expect(f.run.tasks()[0].state).toBe('waiting'); // stop while waiting is ignored
+    f.run.typed('p2'); expect(f.run.tasks()[0].state).toBe('working');
+    expect((await report('waiting', { notificationType: 'other' })).status).toBe(200); expect(f.run.tasks()[0].state).toBe('working'); // only permission prompts wait
+    expect((await report('waiting', { notificationType: 'idle_prompt' })).status).toBe(200); expect(f.run.tasks()[0].state).toBe('attention');
+    f.run.tap('p2', 'hello\r\nworld\r\n');
+    const s = await call(f.run, f.run.controlToken, 'GET', '/tasks/api');
+    expect(s.body).toMatchObject({ id: 'api', state: 'attention', lines: ['hello', 'world'] }); expect(typeof s.body.elapsedSeconds).toBe('number');
+    expect((await call(f.run, f.run.controlToken, 'GET', '/tasks')).body).toHaveLength(2);
+    expect((await report('done')).status).toBe(200); expect(f.run.tasks()[0].state).toBe('done');
+    expect((await report('stop')).status).toBe(200); expect(f.run.tasks()[0].state).toBe('done');
+    expect((await report('failed', { message: 'late' })).status).toBe(200); expect(f.run.tasks()[0].state).toBe('done');
+    f.run.typed('p2'); expect(f.run.tasks()[0].hidden).toBe(true);
+    f.run.exited('p3'); expect(f.run.tasks()[1].state).toBe('planned'); // exit on a planned pane is ignored
+    await f.run.stop();
+  });
+  it('fails a working task whose process exits, and long-polls wait until a change or timeout', async () => {
+    const f = await fixture();
+    await call(f.run, f.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
+    await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start');
+    const waiting = call(f.run, f.run.controlToken, 'GET', '/tasks/wait?ids=api&timeout=5');
+    await new Promise(r => setTimeout(r, 30)); f.run.exited('p2');
+    const w = await waiting; expect(w.body.changed).toBe(true); expect(w.body.tasks[0]).toMatchObject({ id: 'api', state: 'failed' });
+    const t0 = Date.now(); const timed = await call(f.run, f.run.controlToken, 'GET', '/tasks/wait?ids=ui&timeout=0.1');
+    expect(timed.body.changed).toBe(false); expect(Date.now() - t0).toBeLessThan(2000);
+    expect((await call(f.run, f.run.controlToken, 'GET', '/tasks/wait?ids=nope')).status).toBe(404);
+    await f.run.stop();
+  });
+  it('retries by typing into a live pane or relaunching with resume in the worktree', async () => {
+    const typed: string[] = []; const f = await fixture();
+    f.run.writer = (id, data) => { typed.push(`${id}:${data}`); }; f.run.alive = () => true;
+    await call(f.run, f.run.controlToken, 'POST', '/plan', { ...planBody, approved: true });
+    await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start');
+    expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/retry', { feedback: 'fix tests' })).status).toBe(409); // working
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/retry', { feedback: 'fix tests' })).status).toBe(200);
+    expect(typed).toEqual(['p2:fix tests\r']); expect(f.run.tasks()[0]).toMatchObject({ state: 'working', retries: 1 });
+    f.run.alive = () => false; f.run.exited('p2');
+    expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/retry', { feedback: 'again' })).status).toBe(200);
+    expect(f.launches).toEqual(['p2', 'p2']); expect(f.run.tasks()[0].retries).toBe(2);
+    f.run.exited('p2'); expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/retry', { feedback: 'third' })).status).toBe(409); // cap of two
+    await f.run.stop();
+  });
+  it('asks an advisor pane and refuses a worker, and finishes once', async () => {
+    const f = await fixture();
+    expect((await call(f.run, f.run.controlToken, 'POST', '/ask/p2', { prompt: 'review' })).status).toBe(400);
+    const a = await call(f.run, f.run.controlToken, 'POST', '/ask/p4', { prompt: 'review this diff' }); expect(a.body).toEqual({ answer: 'advice' }); expect(f.chats).toEqual(['review this diff']);
+    const fin = await call(f.run, f.run.controlToken, 'POST', '/finish', { report: '# Report\nAll good.' });
+    expect(fin.status).toBe(200); expect(f.finishes).toEqual(['# Report\nAll good.']); expect(f.events.at(-1)).toEqual({ kind: 'finished', summary: 'All good.' });
+    expect((await call(f.run, f.run.controlToken, 'POST', '/finish', { report: 'again' })).status).toBe(409);
+    await f.run.stop();
+  });
+});

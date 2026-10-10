@@ -31,8 +31,8 @@ export class OrchestrateRun {
     this.port = (this.server.address() as { port: number }).port; return this.port;
   }
   async stop(): Promise<void> {
-    await new Promise<void>(resolve => this.server ? this.server.close(() => resolve()) : resolve()); this.server = null;
-    for (const w of this.waiters.splice(0)) w();
+    const server = this.server; this.server = null; for (const w of this.waiters.splice(0)) w();
+    await new Promise<void>(resolve => { if (!server) return resolve(); server.close(() => resolve()); server.closeAllConnections(); });
     await rm(this.deps.runDir, { recursive: true, force: true }); this.deps.emit({ kind: 'off' });
   }
   private pathEnv() { return { PATH: `${this.deps.runDir};${process.env.PATH || ''}` }; }
@@ -48,8 +48,101 @@ export class OrchestrateRun {
   lastLines(paneId: string): string[] { return tail(stripAnsi(this.rings.get(paneId) || ''), 20); }
   tasks(): Task[] { return [...this.live.values()].map(l => ({ ...l.task })); }
   protected reply(res: ServerResponse, status: number, body: unknown): void { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); }
-  async handle(_req: IncomingMessage, res: ServerResponse): Promise<void> { this.reply(res, 404, { error: 'Not found' }); }
-  // Task 3 fills in: signal(), approve(), exited(), typed(), the router and endpoints.
+  /** Set by main: type into a worker PTY, and whether its process is alive. Defaults keep tests and a partially wired main honest. */
+  writer: (paneId: string, data: string) => void = () => { throw new Error('Retry typing is not wired.'); };
+  alive: (paneId: string) => boolean = () => false;
+  hookTokenFor(paneId: string): string { return this.live.get(paneId)?.hookToken || ''; }
+  private async body(req: IncomingMessage): Promise<any> {
+    const chunks: Buffer[] = []; let size = 0;
+    for await (const c of req) { size += (c as Buffer).length; if (size > 1048576) throw Object.assign(new Error('Body exceeds 1 MB'), { status: 413 }); chunks.push(c as Buffer); }
+    if (!chunks.length) return {}; try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw Object.assign(new Error('Body is not JSON'), { status: 400 }); }
+  }
+  private err(status: number, message: string): never { throw Object.assign(new Error(message), { status }); }
+  async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = new URL(req.url || '/', 'http://127.0.0.1'), route = `${req.method} ${url.pathname}`;
+    try {
+      if (route === 'POST /report') { const b = await this.body(req); const paneId = typeof b.paneId === 'string' ? b.paneId : ''; const l = this.live.get(paneId); if (!l || !this.authorized(req, l.hookToken)) return this.reply(res, 401, { error: 'Unauthorized' }); return this.reply(res, 200, { task: this.report(paneId, b) }); }
+      if (!this.authorized(req, this.controlToken)) return this.reply(res, 401, { error: 'Unauthorized' });
+      let m: RegExpExecArray | null;
+      if (route === 'GET /panes') return this.reply(res, 200, this.panes());
+      if (route === 'POST /plan') return this.reply(res, 200, await this.setPlan(await this.body(req)));
+      if (route === 'GET /tasks') return this.reply(res, 200, this.tasks().map(t => this.status(t)));
+      if (route === 'GET /tasks/wait') return this.reply(res, 200, await this.wait(url.searchParams.get('ids') || '', Number(url.searchParams.get('timeout') || 240)));
+      if ((m = /^GET \/tasks\/([a-z0-9-]+)$/.exec(route))) return this.reply(res, 200, this.status(this.find(m[1])));
+      if ((m = /^POST \/tasks\/([a-z0-9-]+)\/start$/.exec(route))) return this.reply(res, 200, await this.startTask(m[1]));
+      if ((m = /^POST \/tasks\/([a-z0-9-]+)\/retry$/.exec(route))) return this.reply(res, 200, await this.retry(m[1], await this.body(req)));
+      if ((m = /^POST \/ask\/([A-Za-z0-9_-]+)$/.exec(route))) return this.reply(res, 200, await this.ask(m[1], await this.body(req)));
+      if (route === 'POST /finish') return this.reply(res, 200, await this.finish(await this.body(req)));
+      this.reply(res, 404, { error: 'Not found' });
+    } catch (error) { const e = error as Error & { status?: number }; this.deps.log(`orchestrate ${route}: ${e.message}`); this.reply(res, e.status || (/^(Invalid|A plan|Task |File |Duplicate|Each task)/.test(e.message) ? 400 : 500), { error: e.message }); }
+  }
+  private roleOf(id: string): 'orchestrator' | 'worker' | 'advisor' | 'none' { const r = this.deps.roles; return id === r.orchestratorPaneId ? 'orchestrator' : r.workerPaneIds.includes(id) ? 'worker' : r.advisorPaneIds.includes(id) ? 'advisor' : 'none'; }
+  private panes() { return this.deps.panes().map(p => { const t = this.live.get(p.id)?.task; return { id: p.id, title: p.title, type: p.type, cwd: p.cwd, role: this.roleOf(p.id), task: t ? { id: t.id, state: t.state } : null }; }); }
+  private find(id: string): Task { const l = [...this.live.values()].find(x => x.task.id === id); if (!l) this.err(404, `No task ${id}`); return l.task; }
+  private status(t: Task) { return { ...t, elapsedSeconds: t.startedAt ? Math.round(((t.finishedAt ? Date.parse(t.finishedAt) : this.now()) - Date.parse(t.startedAt)) / 1000) : 0, lines: this.lastLines(t.paneId) }; }
+  private async setPlan(body: unknown): Promise<Omit<Plan, 'tasks'> & { tasks: Task[] }> {
+    const { roles } = this.deps; const workers = roles.workerPaneIds.filter(id => this.deps.panes().some(p => p.id === id && p.type === 'claude'));
+    const plan = validatePlan(body, { maxWorkers: roles.maxWorkers, workerPanes: workers.length });
+    try { await this.deps.git(['rev-parse', '--is-inside-work-tree'], roles.root); } catch { this.err(400, `${roles.root} is not a git repository; Orchestrate needs one for worktrees`); }
+    if ((await this.deps.git(['status', '--porcelain'], roles.root)).split(/\r?\n/).some(l => l && !l.startsWith('??'))) this.err(400, 'The git index is not clean; commit or stash before planning');
+    const kept = new Map([...this.live.entries()].filter(([, l]) => l.task.state !== 'planned'));
+    const free = workers.filter(id => !kept.has(id)); this.live = kept;
+    for (const pt of plan.tasks) { if ([...kept.values()].some(l => l.task.id === pt.id)) continue; const paneId = free.shift(); if (!paneId) this.err(409, 'No free worker pane for the plan'); const { prompt, ...rest } = pt; const task: Task = { ...rest, state: 'planned', paneId, branch: '', worktree: '', startedAt: '', finishedAt: '', retries: 0, sessionId: '', message: '', hidden: false }; this.live.set(paneId, this.mintTask(task, prompt)); }
+    this.plan = { ...plan, approved: plan.approved || this.plan?.approved === true }; this.bump();
+    return { ...this.plan, tasks: this.tasks() };
+  }
+  private async launchPane(l: Live, signal: Signal): Promise<Task> {
+    const id = l.task.paneId; if (this.launching.has(id)) this.err(409, `Pane ${id} is already launching`);
+    if (!transition(l.task.state, signal)) this.err(409, `Task ${l.task.id} is ${l.task.state}`);
+    await writeFile(l.hooksFile, this.hooksJson(), 'utf8'); this.launching.add(id);
+    try { await this.deps.launch(id); this.signal(id, signal); } catch (error) { this.launching.delete(id); l.task.state = 'failed'; l.task.message = (error as Error).message; this.bump(); throw error; }
+    this.launching.delete(id); await this.locate(l); return l.task;
+  }
+  private async locate(l: Live): Promise<void> {
+    try { const out = await this.deps.git(['worktree', 'list', '--porcelain'], this.deps.roles.root); const want = `/task-${l.task.id}`; let path = '';
+      for (const line of out.split(/\r?\n/)) { if (line.startsWith('worktree ')) path = line.slice(9).replace(/\\/g, '/'); else if (line.startsWith('branch ') && path.endsWith(want)) { l.task.worktree = path; l.task.branch = line.slice(7).replace(/^refs\/heads\//, ''); break; } }
+    } catch (error) { this.deps.log(`worktree lookup: ${(error as Error).message}`); }
+    this.bump();
+  }
+  private async startTask(id: string): Promise<Task> {
+    const t = this.find(id); const l = this.live.get(t.paneId)!; if (!this.plan?.approved) this.err(409, 'The plan is not approved yet');
+    if (t.state === 'attention' || t.state === 'failed' || t.state === 'interrupted') this.err(409, `Task ${id} is ${t.state}; use retry`);
+    t.sessionId = this.uuid(); t.startedAt = new Date(this.now()).toISOString(); t.finishedAt = ''; t.retries = 0; t.message = ''; t.hidden = false;
+    return this.launchPane(l, 'start');
+  }
+  private async retry(id: string, body: any): Promise<Task> {
+    const t = this.find(id); const l = this.live.get(t.paneId)!; const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : ''; if (!feedback || feedback.length > 65536) this.err(400, 'feedback is required (1 to 65536 characters)');
+    if (!transition(t.state, 'retry')) this.err(409, `Task ${id} is ${t.state}`); if (t.retries >= 2) this.err(409, `Task ${id} already retried twice`);
+    t.retries++; t.message = ''; t.finishedAt = '';
+    if (this.alive(t.paneId)) { this.writer(t.paneId, feedback.replace(/\r?\n/g, ' ') + '\r'); this.signal(t.paneId, 'retry'); return t; }
+    if (!t.sessionId || !t.worktree) this.err(409, `Task ${id} has no session to resume`);
+    l.prompt = feedback; return this.launchPane(l, 'retry');
+  }
+  private report(paneId: string, b: any): Task | null {
+    const kind = b.kind, message = typeof b.message === 'string' ? b.message.slice(0, 2000) : '';
+    if (kind === 'done' || kind === 'failed' || kind === 'stop') return this.signal(paneId, kind, message);
+    if (kind === 'waiting') return b.notificationType === 'permission_prompt' ? this.signal(paneId, 'waiting', 'Waiting for permission') : b.notificationType === 'idle_prompt' ? this.signal(paneId, 'stop', 'Idle, waiting for input') : null;
+    this.err(400, 'kind must be done, failed, stop or waiting');
+  }
+  private wait(ids: string, timeout: number): Promise<{ changed: boolean; tasks: Task[] }> {
+    const want = ids ? ids.split(',').map(s => s.trim()).filter(Boolean) : this.tasks().map(t => t.id); for (const id of want) this.find(id);
+    const pick = () => this.tasks().filter(t => want.includes(t.id)); const snapshot = JSON.stringify(pick().map(t => [t.id, t.state, t.retries])); const ms = Math.max(0, Math.min(240, Number.isFinite(timeout) ? timeout : 240)) * 1000;
+    return new Promise(resolve => {
+      const done = (changed: boolean) => { clearTimeout(timer); this.waiters = this.waiters.filter(w => w !== check); resolve({ changed, tasks: pick() }); };
+      const check = () => { if (JSON.stringify(pick().map(t => [t.id, t.state, t.retries])) !== snapshot || !this.server) done(JSON.stringify(pick().map(t => [t.id, t.state, t.retries])) !== snapshot); };
+      const timer = setTimeout(() => done(false), ms); this.waiters.push(check);
+    });
+  }
+  private async ask(paneId: string, body: any): Promise<{ answer: string }> {
+    this.ensureId(paneId); if (this.roleOf(paneId) !== 'advisor') this.err(400, `Pane ${paneId} is not an advisor (Local Model) pane`);
+    const prompt = typeof body.prompt === 'string' ? body.prompt : ''; if (!prompt.trim() || prompt.length > 262144) this.err(400, 'prompt is required (1 to 262144 characters)');
+    return { answer: await this.deps.chat(paneId, prompt) };
+  }
+  private async finish(body: any): Promise<{ summary: string }> {
+    if (this.finished) this.err(409, 'This run already finished'); const report: string = typeof body.report === 'string' ? body.report.trim() : ''; if (!report || report.length > 1048576) this.err(400, 'report is required');
+    const summary = report.split(/\r?\n/).map(l => l.replace(/^#+\s*/, '').trim()).filter(l => l && !/^report$/i.test(l))[0] || 'Finished'; this.finished = true;
+    await this.deps.finish(report, summary.slice(0, 200), { tasks: this.tasks(), plan: this.plan }); this.deps.emit({ kind: 'finished', summary: summary.slice(0, 200) }); return { summary };
+  }
   protected signal(paneId: string, signal: Signal, message = ''): Task | null { const l = this.live.get(paneId); if (!l) return null; const next = transition(l.task.state, signal); if (!next) return null; l.task.state = next; if (message) l.task.message = message; if (next === 'done' || next === 'failed') l.task.finishedAt = new Date(this.now()).toISOString(); if (next === 'working') l.task.hidden = false; this.bump(); return l.task; }
   protected bump(): void { this.version++; for (const w of this.waiters.splice(0)) w(); this.deps.emit({ kind: 'tasks', approved: this.plan?.approved === true, tasks: this.tasks() }); }
   exited(paneId: string): void { this.signal(paneId, 'exit', 'Process exited without a report.'); }
