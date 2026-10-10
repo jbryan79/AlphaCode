@@ -38,7 +38,7 @@ const vault=new MemoryVault(join(DEFAULT_ROOT,'AlphaCode Vault'),process.env.CLA
 const lastStates=new Map<string,string>();
 const emitOrchestrate=(event:OrchestrateEvent)=>{
   // A worker that just entered Waiting needs the user; one toast per entry, like the finish toast.
-  if(event.kind==='tasks')for(const t of event.tasks){if(t.state==='waiting'&&lastStates.get(t.id)!=='waiting')new Notification({title:'Worker needs you',body:`${t.title}: ${t.message||'waiting for input'}`}).show();lastStates.set(t.id,t.state);}
+  if(event.kind==='tasks')for(const t of event.tasks){if(t.state==='waiting'&&lastStates.get(t.id)!=='waiting'&&Notification.isSupported())new Notification({title:'Worker needs you',body:`${t.title}: ${t.message||'waiting for input'}`}).show();lastStates.set(t.id,t.state);}
   if(event.kind==='off')lastStates.clear();
   if(window&&!window.isDestroyed())window.webContents.send('bridge:orchestrate-event',event);
 };
@@ -46,8 +46,8 @@ const git=(args:string[],cwd:string)=>new Promise<string>((resolve,reject)=>exec
 const activePanes=()=>{const s=stateStore.current;return s?.workspaces.find(w=>w.id===s.activeWorkspaceId)?.panes||[];};
 const runNote=(report:string,summary:string,r:{tasks:Task[];plan:Plan|null},roles:OrchestrateRoles)=>{
   const date=new Date().toISOString().slice(0,10),project=roles.root.split(/[\\/]/).filter(Boolean).pop()||'project';
-  const rows=r.tasks.map(t=>`| ${t.id} | ${t.title} | ${t.state} | ${t.branch||''} | ${t.model} | ${t.retries} | ${t.message.replace(/\|/g,'/')} |`).join('\n');
-  return `---\nname: run-${date}-${summary.toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,40)}\ndescription: ${summary.replace(/\n/g,' ')}\nmetadata:\n  type: run\n  project: ${project}\n---\n# Orchestrate run ${date}: ${summary}\n\nProject: \`${roles.root}\`\nTest command: \`${r.plan?.tests||''}\`\n\n## Tasks\n\n| id | title | outcome | branch | model | retries | note |\n|---|---|---|---|---|---|---|\n${rows}\n\n## Report\n\n${report}\n`;
+  const rows=r.tasks.map(t=>`| ${t.id} | ${t.title.replace(/\|/g,'/')} | ${t.state} | ${t.branch||''} | ${t.model} | ${t.retries} | ${t.message.replace(/\s+/g,' ').replace(/\|/g,'/')} |`).join('\n');
+  return `---\nname: run-${date}-${summary.toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,40)}\ndescription: ${JSON.stringify(summary.replace(/\s+/g,' '))}\nmetadata:\n  type: run\n  project: ${JSON.stringify(project)}\n---\n# Orchestrate run ${date}: ${summary}\n\nProject: \`${roles.root}\`\nTest command: \`${r.plan?.tests||''}\`\n\n## Tasks\n\n| id | title | outcome | branch | model | retries | note |\n|---|---|---|---|---|---|---|\n${rows}\n\n## Report\n\n${report}\n`;
 };
 
 const obsidianRunning=()=>new Promise<boolean>(resolve=>execFile('tasklist.exe',['/FI','IMAGENAME eq Obsidian.exe','/NH'],{windowsHide:true},(error,stdout)=>resolve(!error&&/obsidian\.exe/i.test(stdout))));
@@ -84,15 +84,15 @@ function registerIpc():void{
   handle('bridge:vault-resolve',(name,workspaces)=>vault.resolve(name,workspaces));
   handle('bridge:open-obsidian-vault',async(path:string)=>{await shell.openExternal(await vault.obsidianUrl(path));});
   handle('bridge:orchestrate-start',async(value:OrchestrateRoles)=>{
-    if(run)await run.stop().catch(()=>{});
     const workerPaneIds=(value.workerPaneIds||[]).slice(0,5).map(validateId);
     const resume=validateOrchestrate({...emptyOrchestrate(),tasks:Array.isArray(value.resume)?value.resume.slice(0,5):[]},workerPaneIds).tasks.filter(t=>t.state==='interrupted');
     const roles:OrchestrateRoles={workspaceId:validateId(value.workspaceId),root:str(value.root,'project directory'),orchestratorPaneId:validateId(value.orchestratorPaneId),workerPaneIds,advisorPaneIds:(value.advisorPaneIds||[]).slice(0,5).map(validateId),maxWorkers:Math.min(5,Math.max(1,Number(value.maxWorkers)||5)),resume};
     const playbookPath=join(app.getPath('userData'),'orchestrate.md');if(!existsSync(playbookPath))await copyFile(join(app.getAppPath(),'public','orchestrate.md'),playbookPath);
+    const prev=run;run=null;await prev?.stop().catch(()=>{});
     const r=new OrchestrateRun({runDir:join(app.getPath('userData'),'orchestrate',randomUUID()),execPath:process.execPath,cliPath:join(__dirname,'cli.js'),playbookPath,roles,panes:activePanes,git,
       launch:paneId=>new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{if(pendingLaunches.delete(paneId))reject(new Error('Pane did not start within 20 seconds.'));},20000);pendingLaunches.set(paneId,{resolve:()=>{clearTimeout(timer);resolve();},reject:e=>{clearTimeout(timer);reject(e);}});emitOrchestrate({kind:'launch',paneId});}),
       chat:async(paneId,prompt)=>{const pane=activePanes().find(p=>p.id===paneId),profile=stateStore.current?.profiles.find(p=>p.id===pane?.profileId);if(!pane||!profile)throw new Error('Advisor pane has no local model profile.');return providers.chat(paneId,profile,[{role:'user',content:prompt}]);},
-      finish:async(report,summary,result)=>{new Notification({title:'Orchestrator finished',body:summary}).show();try{await vault.writeNote('AlphaCode Runs',`${new Date().toISOString().slice(0,10)} ${summary}`,runNote(report,summary,result,roles));}catch(error){emitOrchestrate({kind:'error',message:`Run note was not written: ${(error as Error).message}`});}},
+      finish:async(report,summary,result)=>{try{if(Notification.isSupported())new Notification({title:'Orchestrator finished',body:summary}).show();await vault.writeNote('AlphaCode Runs',`${new Date().toISOString().slice(0,10)} ${summary}`,runNote(report,summary,result,roles));}catch(error){emitOrchestrate({kind:'error',message:`Run note was not written: ${(error as Error).message}`});}},
       emit:emitOrchestrate,log:m=>console.error(m)});
     r.writer=(id,data)=>terminals.write(id,data);r.alive=id=>terminals.has(id);
     run=r;try{await r.start();}catch(error){run=null;throw error;}
@@ -130,8 +130,8 @@ if(helperIndex>=0){
   // The helper owns no BrowserWindow, renderer, or IPC handlers.
   app.whenReady().then(()=>runElevatedHelper(process.argv[helperIndex+1]||'',spawn)).catch(error=>{console.error('AlphaCode helper:',(error as Error).message);app.exit(1);});
 }else{
-  app.whenReady().then(async()=>{elevatedApp=isAdministrator();assertNormalToken(elevatedApp);for(const suffix of ['a','b','c','d'])await mkdir(join(DEFAULT_ROOT,'workspaces',`claude-${suffix}`),{recursive:true});registerIpc();await createWindow();void vault.scan();setInterval(()=>void vault.scan(),5*60*1000);}).catch(error=>{dialog.showErrorBox('AlphaCode cannot start',(error as Error).message);app.exit(1);});
+  app.whenReady().then(async()=>{elevatedApp=isAdministrator();assertNormalToken(elevatedApp);app.setAppUserModelId('com.jabsystems.alphacode');for(const suffix of ['a','b','c','d'])await mkdir(join(DEFAULT_ROOT,'workspaces',`claude-${suffix}`),{recursive:true});registerIpc();await createWindow();void vault.scan();setInterval(()=>void vault.scan(),5*60*1000);}).catch(error=>{dialog.showErrorBox('AlphaCode cannot start',(error as Error).message);app.exit(1);});
   app.on('window-all-closed',()=>app.quit());
   let quitting=false;
-  app.on('before-quit',event=>{if(quitting)return;quitting=true;event.preventDefault();run?.stop().catch(()=>{});admins.stopAll();providers.cancelAll();Promise.all([terminals.stopAll(),stateStore.flush()]).finally(()=>app.quit());});
+  app.on('before-quit',event=>{if(quitting)return;quitting=true;event.preventDefault();admins.stopAll();providers.cancelAll();Promise.all([run?.stop().catch(()=>{}),terminals.stopAll(),stateStore.flush()]).finally(()=>app.quit());});
 }

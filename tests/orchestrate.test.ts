@@ -354,6 +354,7 @@ describe('vault run notes', () => {
     const root = await mkdtemp(join(tmpdir(), 'alphacode-note-')); const vault = new MemoryVault(join(root, 'vault'), join(root, 'claude'), 'x', join(root, 'obsidian.json'), {} as any);
     const file = await vault.writeNote('AlphaCode Runs', '2026-10-10 add export: endpoint?', '---\nname: run\n---\nbody\n');
     expect(file).toBe(join(root, 'vault', 'AlphaCode Runs', '2026-10-10 add export_ endpoint_.md')); expect(await readFile(file, 'utf8')).toContain('body');
+    expect(await vault.writeNote('AlphaCode Runs', '2026-10-10 add export: endpoint?', 'again')).toBe(join(root, 'vault', 'AlphaCode Runs', '2026-10-10 add export_ endpoint_ (2).md'));
     await expect(vault.writeNote('../x', 'n', 't')).rejects.toThrow(); await rm(root, { recursive: true, force: true });
   });
 });
