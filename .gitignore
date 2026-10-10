@@ -12,3 +12,8 @@ work/
 /crates/app/gen
 *.tmp
 .claude/data/
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md
+.claude/worktrees/
