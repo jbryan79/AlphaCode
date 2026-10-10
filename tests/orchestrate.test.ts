@@ -29,6 +29,12 @@ describe('plan validation', () => {
     expect(() => validatePlan(plan([t('a', ['a']), t('b', ['b']), t('c', ['c'])]), { maxWorkers: 5, workerPanes: 2 })).toThrow(/1 to 2/);
     expect(() => validatePlan(plan([t('a', ['x'], { prompt: '' })]), limits)).toThrow(/prompt/);
   });
+  it('collapses dot segments so variants of one path conflict, and rejects a path naming no file', () => {
+    expect(() => validatePlan(plan([t('a', ['src/./x.ts']), t('b', ['src/x.ts'])]), limits)).toThrow(/claimed by both a and b/);
+    expect(normalizeFile('./src/./x.ts')).toBe('src/x.ts'); expect(normalizeFile('src/api/./')).toBe('src/api/');
+    expect(() => validatePlan(plan([t('a', ['.'])]), limits)).toThrow(/names no file/);
+    expect(() => validatePlan(plan([t('a', ['./'])]), limits)).toThrow(/names no file/);
+  });
 });
 
 describe('task state machine', () => {
@@ -73,6 +79,10 @@ describe('persistence', () => {
     expect(() => validateOrchestrate({ ...emptyOrchestrate(), orchestratorPaneId: 'zz' }, ['p1'])).toThrow(/pane/);
     expect(() => validateOrchestrate({ ...emptyOrchestrate(), tasks: [{ ...task(), prompt: 'secret' }] }, ['p2'])).toThrow(/prompt/);
     expect(() => validateOrchestrate({ ...emptyOrchestrate(), token: 'x' }, ['p1'])).toThrow(/unknown/i);
+  });
+  it('rejects persisted task ids that fail the id rule and duplicate ids', () => {
+    expect(() => validateOrchestrate({ ...emptyOrchestrate(), tasks: [task({ id: '../x', paneId: 'p2' })] }, ['p2'])).toThrow(/must match/);
+    expect(() => validateOrchestrate({ ...emptyOrchestrate(), tasks: [task({ id: 'a', paneId: 'p2' }), task({ id: 'a', paneId: 'p2' })] }, ['p2'])).toThrow(/Duplicate task ids/);
   });
   it('pads presets with the requested pane type', () => {
     const w = applyPreset({ ...ws, panes: [], layout: [] }, 6, 'claude');

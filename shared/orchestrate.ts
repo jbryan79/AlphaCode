@@ -6,12 +6,16 @@ export const TASK_STATES: readonly TaskState[] = ['planned', 'working', 'waiting
 export const TASK_LABELS: Record<TaskState, string> = { planned: 'Planned', working: 'Working', waiting: 'Waiting', attention: 'Needs attention', done: 'Task done', failed: 'Failed', interrupted: 'Interrupted' };
 export type Signal = 'start' | 'waiting' | 'typed' | 'stop' | 'retry' | 'done' | 'failed' | 'exit';
 const fail = (m: string): never => { throw new Error(m); };
+export const ID_RE = /^[a-z0-9-]{1,32}$/;
 
 /** Repo-relative, forward slashes, no leading ./; keeps a trailing slash (a folder claim). Throws on anything that could leave the repo. */
 export function normalizeFile(value: unknown): string {
-  const raw = str(value, 'file path', 1024).replace(/\\/g, '/').replace(/^\.\//, '');
-  if (!raw || /^([A-Za-z]:|\/)/.test(raw) || raw.split('/').includes('..') || /^~/.test(raw)) fail(`File path ${JSON.stringify(raw)} is outside the repository`);
-  return raw.replace(/\/{2,}/g, '/');
+  const raw = str(value, 'file path', 1024).replace(/\\/g, '/'), folder = raw.endsWith('/');
+  if (/^([A-Za-z]:|\/|~)/.test(raw)) fail(`File path ${JSON.stringify(raw)} is outside the repository`);
+  const parts = raw.split('/').filter(s => s !== '' && s !== '.');
+  if (parts.includes('..')) fail(`File path ${JSON.stringify(raw)} is outside the repository`);
+  if (!parts.length) fail(`File path ${JSON.stringify(raw)} names no file`);
+  return parts.join('/') + (folder ? '/' : '');
 }
 /** Two normalized entries collide when equal (case-insensitive) or when one is a folder claim that contains the other. */
 export function conflicts(a: string, b: string): boolean {
@@ -25,7 +29,7 @@ export function validatePlan(value: unknown, limits: { maxWorkers: number; worke
   const tests = p.tests === undefined ? '' : str(p.tests, 'test command', 500);
   const tasks: PlanTask[] = p.tasks.map((v: any) => {
     if (!v || typeof v !== 'object') fail('Each task is an object');
-    const id = str(v.id, 'task id', 32); if (!/^[a-z0-9-]{1,32}$/.test(id)) fail(`Task id ${JSON.stringify(id)} must match ^[a-z0-9-]{1,32}$`);
+    const id = str(v.id, 'task id', 32); if (!ID_RE.test(id)) fail(`Task id ${JSON.stringify(id)} must match ^[a-z0-9-]{1,32}$`);
     if (!Array.isArray(v.files) || v.files.length < 1 || v.files.length > 200) fail(`Task ${id}: files lists 1 to 200 entries`);
     if (!MODELS.includes(v.model)) fail(`Task ${id}: model must be one of ${MODELS.join(', ')}`);
     if (!Number.isInteger(v.minutes) || v.minutes < 1 || v.minutes > 240) fail(`Task ${id}: minutes must be 1 to 240`);
@@ -70,8 +74,10 @@ export function validateOrchestrate(value: unknown, paneIds: string[]): Orchestr
     if (!v || typeof v !== 'object') fail('Invalid task'); for (const k of Object.keys(v)) if (!TASK_KEYS.includes(k)) fail(k === 'prompt' ? 'Task prompt text is never saved' : `Unknown task field ${k}`);
     if (!TASK_STATES.includes(v.state) || !MODELS.includes(v.model) || !Number.isInteger(v.minutes) || !Number.isInteger(v.retries) || !Array.isArray(v.files)) fail('Invalid task');
     const paneId = v.paneId ? validateId(v.paneId) : ''; if (paneId && !paneIds.includes(paneId)) fail('Task pane is not in this workspace');
+    const id = str(v.id, 'task id', 32); if (!ID_RE.test(id)) fail(`Task id ${JSON.stringify(id)} must match ^[a-z0-9-]{1,32}$`);
     const state: TaskState = v.state === 'working' || v.state === 'waiting' ? 'interrupted' : v.state;
-    return { id: str(v.id, 'task id', 32), title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, state, paneId, branch: str(v.branch || '', 'branch', 200), worktree: str(v.worktree || '', 'worktree', 32768), startedAt: str(v.startedAt || '', 'startedAt', 40), finishedAt: str(v.finishedAt || '', 'finishedAt', 40), retries: v.retries, sessionId: str(v.sessionId || '', 'sessionId', 64), message: str(v.message || '', 'message', 2000), hidden: v.hidden === true };
+    return { id, title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, state, paneId, branch: str(v.branch || '', 'branch', 200), worktree: str(v.worktree || '', 'worktree', 32768), startedAt: str(v.startedAt || '', 'startedAt', 40), finishedAt: str(v.finishedAt || '', 'finishedAt', 40), retries: v.retries, sessionId: str(v.sessionId || '', 'sessionId', 64), message: str(v.message || '', 'message', 2000), hidden: v.hidden === true };
   });
+  if (new Set(tasks.map(t => t.id)).size !== tasks.length) fail('Duplicate task ids');
   return { on: false, orchestratorPaneId, maxWorkers: o.maxWorkers, approved: o.approved === true, tasks };
 }
