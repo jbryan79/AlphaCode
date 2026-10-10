@@ -123,8 +123,9 @@ Main process builds the candidate list on every call:
 
 Matching key: lowercase, strip every character that is not a letter or digit. A candidate
 matches when its key equals the query key, or starts with it, or contains it, in that order
-of preference. Results are the best-preference tier only, so an exact match hides prefix
-matches.
+of preference. Within each kind, only the best-preference tier is returned, so an exact
+project match hides prefix project matches but never hides the Obsidian vault that matches
+by prefix. That is what lets "Peptide Sciences 101" open both the project and its vault.
 
 Renderer behavior on the result:
 
