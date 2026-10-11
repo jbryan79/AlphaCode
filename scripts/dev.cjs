@@ -3,7 +3,7 @@ const electron = require('electron');
 (async()=>{
   const vite=await (await import('vite')).createServer();
   await vite.listen();
-  const desktop=spawn(electron,['.','--dev'],{stdio:'inherit',env:{...process.env,ELECTRON_RUN_AS_NODE:''}});
+  const desktop=spawn(electron,['.','--dev'],{stdio:'inherit',env:(({ELECTRON_RUN_AS_NODE,...e})=>e)(process.env)});
   const quit=code=>{desktop.kill();vite.close().finally(()=>process.exit(code));};
   desktop.on('exit',code=>quit(code||0));
   process.on('SIGINT',()=>quit(0));process.on('SIGTERM',()=>quit(0));

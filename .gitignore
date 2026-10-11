@@ -17,3 +17,5 @@ work/
 #Ignore vscode AI rules
 .github\instructions\codacy.instructions.md
 .claude/worktrees/
+
+.github/
