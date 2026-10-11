@@ -5,7 +5,7 @@ import { Play, RotateCcw, Square, Shield } from 'lucide-react';
 import type { PaneConfig, SessionStatus } from '../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
-export default function TerminalPane({pane,status,focused,message,relaunch=0,onError}: {pane:PaneConfig;status:SessionStatus;focused:boolean;message?:string;relaunch?:number;onError:(s:string)=>void}) {
+export default function TerminalPane({pane,status,focused,message,relaunch=0,locked=false,onError}: {pane:PaneConfig;locked?:boolean;status:SessionStatus;focused:boolean;message?:string;relaunch?:number;onError:(s:string)=>void}) {
   const host=useRef<HTMLDivElement>(null),terminal=useRef<Terminal|null>(null),fit=useRef<FitAddon|null>(null),config=useRef(pane);
   const [launching,setLaunching]=useState(false); config.current=pane;
   const start=async()=>{
@@ -36,6 +36,8 @@ export default function TerminalPane({pane,status,focused,message,relaunch=0,onE
     if(pane.autoStart)void start();
     return()=>{unsubscribe();input.dispose();observer.disconnect();term.dispose();terminal.current=null;};
   },[]);
+  // disableStdin drops keyboard and paste only; xterm's own replies to the program still go through.
+  useEffect(()=>{if(terminal.current)terminal.current.options.disableStdin=locked;},[locked]);
   useEffect(()=>{if(focused)terminal.current?.focus();},[focused]);
   useEffect(()=>{if(relaunch)void start();},[relaunch]);
   const active=['running','starting'].includes(status)||launching;

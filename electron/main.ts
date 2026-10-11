@@ -118,6 +118,8 @@ async function createWindow():Promise<void>{
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.once('ready-to-show',()=>{if(!window)return;if(rect)window.setContentBounds(rect);window.show();if(rect)window.setContentBounds(rect);if(last.maximized)window.maximize();restored=JSON.stringify(window.getContentBounds());});
+  // Quitting kills the orchestrator and every worker session: make the user say so.
+  window.on('close',event=>{if(run&&dialog.showMessageBoxSync(window!,{type:'warning',buttons:['Keep running','Close and stop the run'],defaultId:0,cancelId:0,title:'Orchestrate is running',message:'Closing AlphaCode ends the orchestrator and every worker.'})===0)event.preventDefault();});
   window.on('close',()=>{try{const maximized=window!.isMaximized(),current=maximized?window!.getNormalBounds():window!.getContentBounds();
     // ponytail: a maximized window keeps the rectangle it was restored from; a resize made before maximizing in the same session is not kept.
     const unchanged=maximized||JSON.stringify(current)===restored;writeFileSync(windowPath,JSON.stringify({...(unchanged&&last.width?last:current),maximized}));}catch{/* Geometry is a convenience; never block closing on it. */}});
