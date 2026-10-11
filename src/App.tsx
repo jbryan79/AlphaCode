@@ -23,6 +23,9 @@ export default function App() {
   const [vault,setVault]=useState<VaultInfo|null>(null);
   const [starting,setStarting]=useState(false);
   const [orch,setOrch]=useState<{approved:boolean;tasks:Task[];finished:string}>({approved:false,tasks:[],finished:''});
+  // Panes that belong to the current run (orchestrator, workers, advisors); everything else is a side pane. Kept here, not saved: a run never survives an app restart.
+  const [runPanes,setRunPanes]=useState<string[]>([]),[tab,setTab]=useState<'run'|'side'>('run');
+  useEffect(()=>{if(focused&&runPanes.length)setTab(runPanes.includes(focused)?'run':'side');},[focused,runPanes]);
   const refreshVault=()=>{if(!window.bridge)return;window.bridge.vaultInfo().then(setVault).catch(e=>setVault({path:'',projects:0,notes:0,obsidian:false,scannedAt:'',message:String(e)}));};
   useEffect(()=>{refreshVault();window.addEventListener('focus',refreshVault);return()=>window.removeEventListener('focus',refreshVault);},[]);
   const gridHost=useRef<HTMLDivElement>(null),dragOrigin=useRef<GridItem[]>([]),stateRef=useRef(state);stateRef.current=state;
@@ -107,7 +110,7 @@ export default function App() {
     const resume=orchestrate.tasks.filter(t=>t.state==='interrupted'&&workerPaneIds.includes(t.paneId));
     const roles:OrchestrateRoles={workspaceId:w.id,root:orchestrator.cwd,orchestratorPaneId:orchestrator.id,workerPaneIds,advisorPaneIds:w.panes.filter(p=>p.type==='local-model').map(p=>p.id),maxWorkers:orchestrate.maxWorkers,resume};
     try{await Promise.all(removed.map(async p=>{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);}));
-      const testEnv=await window.bridge.orchestrateStart(roles);started=true;if(testEnv)(window as any).__orchestrateEnv={ALPHACODE_CONTROL_URL:testEnv.url,ALPHACODE_CONTROL_TOKEN:testEnv.token};
+      const testEnv=await window.bridge.orchestrateStart(roles);started=true;setRunPanes([orchestrator.id,...workerPaneIds,...roles.advisorPaneIds]);setTab('run');if(testEnv)(window as any).__orchestrateEnv={ALPHACODE_CONTROL_URL:testEnv.url,ALPHACODE_CONTROL_TOKEN:testEnv.token};
       setState(s=>s?{...s,workspaces:s.workspaces.map(x=>x.id===w.id?{...x,panes:w.panes,layout:w.layout,orchestrate:{...(x.orchestrate||emptyOrchestrate()),on:true,orchestratorPaneId:orchestrator.id,approved:false,tasks:resume}}:x)}:s);setMaximized('');setOrch({approved:false,tasks:resume,finished:''});
       await window.bridge.stopSession(orchestrator.id);setRelaunch(r=>({...r,[orchestrator.id]:(r[orchestrator.id]||0)+1}));setFocused(orchestrator.id);
     }catch(e){if(started)await window.bridge.orchestrateStop().catch(()=>{});report(String(e));update(x=>x.orchestrate?{...x,orchestrate:{...x.orchestrate,on:false}}:x);}
@@ -115,9 +118,10 @@ export default function App() {
   const orchestrateOff=async()=>{try{await window.bridge.orchestrateStop();}catch(e){report(String(e));}update(w=>({...w,orchestrate:{...(w.orchestrate||emptyOrchestrate()),on:false,approved:false,tasks:[]}}));setOrch({approved:false,tasks:[],finished:''});};
   const taskFor=(paneId:string)=>orch.tasks.find(t=>t.paneId===paneId);
   // The run owns its project folder: nothing else may start a session there from inside AlphaCode (an outside terminal still can).
-  const reserved=(paneId:string,cwd:string)=>{const root=workspace?.panes.find(x=>x.id===orchestrate.orchestratorPaneId)?.cwd;const own=paneId===orchestrate.orchestratorPaneId||orch.tasks.some(t=>t.paneId===paneId);if(!orchestrate.on||!root||own||!insideRoot(root,cwd))return false;report(`${root} is being orchestrated. Start other work in a different folder, or turn Orchestrate off.`);return true;};
+  const reserved=(paneId:string,cwd:string)=>{const root=workspace?.panes.find(x=>x.id===orchestrate.orchestratorPaneId)?.cwd;const own=runPanes.includes(paneId)||orch.tasks.some(t=>t.paneId===paneId);if(!orchestrate.on||!root||own||!insideRoot(root,cwd))return false;report(`${root} is being orchestrated. Start other work in a different folder, or turn Orchestrate off.`);return true;};
   // While Orchestrate is on, its Claude panes belong to the run: they cannot be closed, and workers take no typing except to answer a permission prompt (waiting) or after they finish.
-  const pinned=(p:PaneConfig)=>orchestrate.on&&p.type==='claude';
+  const grouped=orchestrate.on&&runPanes.length>0;
+  const pinned=(p:PaneConfig)=>grouped&&runPanes.includes(p.id)&&p.type==='claude';
   const locked=(p:PaneConfig)=>{if(!pinned(p)||p.id===orchestrate.orchestratorPaneId)return false;const t=taskFor(p.id);return !t||t.state==='planned'||t.state==='working'||t.state==='attention';};
   const badge=(p:PaneConfig):{cls:string;text:string}|null=>{
     if(!orchestrate.on)return null;
@@ -141,7 +145,10 @@ export default function App() {
   }catch(e){report(String(e));}};
   const chooseRoot=async()=>{try{const root=await window.bridge.chooseDirectory();if(root)update(w=>moveWorkspace(w,root));}catch(e){report(String(e));}};
   if(!state||!workspace)return <main className="loading"><Terminal size={28}/><h1>AlphaCode</h1><p>by JABSystems</p><p>{notice||'Loading your local workspace…'}</p></main>;
-  const rowCount=Math.max(1,Math.ceil(workspace.panes.length/2));const gridRows=rowCount*4;const rowHeight=Math.max(28,Math.floor((viewport-8*(gridRows-1))/gridRows));
+  const rowHeightFor=(n:number)=>{const rows=Math.max(1,Math.ceil(n/2))*4;return Math.max(28,Math.floor((viewport-8*(rows-1))/rows));};
+  const allIds=workspace.panes.map(p=>p.id),groups=grouped?[{key:'run',ids:allIds.filter(i=>runPanes.includes(i)),visible:tab==='run'},{key:'side',ids:allIds.filter(i=>!runPanes.includes(i)),visible:tab==='side'}]:[{key:'run',ids:allIds,visible:true}];
+  // Layout edits made in one group's grid must not disturb the other group's panes.
+  const scoped=(w:Workspace,ids:string[],op:(s:Workspace)=>Workspace):Workspace=>{const mine=(id:string)=>ids.includes(id);const out=op({...w,panes:w.panes.filter(p=>mine(p.id)),layout:w.layout.filter(l=>mine(l.i))});const queue=[...out.panes];return {...out,panes:w.panes.map(p=>mine(p.id)?queue.shift()!:p),layout:[...w.layout.filter(l=>!mine(l.i)),...out.layout]};};
   const running=workspace.panes.filter(p=>isActive(p.id)).length;
   return <div className={`app-shell ${sidebar?'':'sidebar-hidden'}`}>
     <header className="app-toolbar"><div className="brand"><span className="brand-mark"><Terminal size={17}/></span><strong>AlphaCode</strong></div>{!sidebar&&<><span className="toolbar-divider"/><span className="workspace-title">{workspace.name}</span></>}
@@ -164,22 +171,25 @@ export default function App() {
       </section>
     </aside>}
     <main className="workspace-main"><div className="workspace-subbar"><span>{maximized?'Focused pane':workspace.locked?<>Layout locked<Lock size={11}/></>:workspace.panes.length>1&&<>Drag a pane header to arrange<label>Drag<select aria-label="Drag behavior" value={moveMode} onChange={e=>setMoveMode(e.target.value as 'reflow'|'swap')}><option value="reflow">Reflow</option><option value="swap">Swap</option></select></label><button className="ghost" onClick={()=>update(w=>({...w,layout:balancedLayout(w.panes)}))}>Balance panes</button></>}</span><span>{maximized?<button className="ghost" onClick={()=>setMaximized('')}><Minimize2 size={12}/>Restore grid</button>:<><span className="status-dot running"/>{running} active<span className="subbar-separator">/</span>{workspace.panes.length} pane{workspace.panes.length===1?'':'s'}</>}{workspace.panes.length>0&&<button className="ghost danger" title="Close every pane and end its session" onClick={()=>void closeAll()}><X size={12}/>Close all</button>}</span></div>
+      {grouped&&<div className="orch-tabs" role="tablist"><button role="tab" aria-selected={tab==='run'} className={`ghost ${tab==='run'?'selected':''}`} onClick={()=>setTab('run')}>Orchestration{counts('waiting')>0&&<span className="tab-alert">{counts('waiting')} waiting</span>}</button><button role="tab" aria-selected={tab==='side'} className={`ghost ${tab==='side'?'selected':''}`} onClick={()=>setTab('side')}>Side ({groups[1].ids.length})</button></div>}
       <div className={`grid-host ${maximized?'has-maximized':''}`} ref={gridHost}>
         {workspace.panes.length===0&&<div className="empty-workspace"><Terminal size={32}/><h2>Your workspace is ready</h2><p>Add a terminal or local model pane to get started.</p><button className="primary" onClick={()=>add('powershell')}><Plus size={14}/>Add PowerShell</button></div>}
-        <GridLayout width={width} cols={12} rowHeight={rowHeight} margin={[8,8]} containerPadding={[0,0]} layout={workspace.layout as Layout[]} draggableHandle=".pane-drag-handle" draggableCancel=".pane-actions,button,input,select" isDraggable={!workspace.locked&&!maximized} isResizable={!workspace.locked&&!maximized&&workspace.panes.length>1} allowOverlap={moveMode==='swap'} compactType={moveMode==='swap'?null:'vertical'}
-          onDragStart={()=>{dragOrigin.current=workspace.layout.map(l=>({...l}));}}
+        {groups.map(g=>{const ids=g.ids,list=workspace.panes.filter(p=>ids.includes(p.id)),groupLayout=workspace.layout.filter(l=>ids.includes(l.i));return <div key={g.key} className="grid-group" hidden={!g.visible}>
+        <GridLayout width={width} cols={12} rowHeight={rowHeightFor(list.length)} margin={[8,8]} containerPadding={[0,0]} layout={groupLayout as Layout[]} draggableHandle=".pane-drag-handle" draggableCancel=".pane-actions,button,input,select" isDraggable={!workspace.locked&&!maximized} isResizable={!workspace.locked&&!maximized&&list.length>1} allowOverlap={moveMode==='swap'} compactType={moveMode==='swap'?null:'vertical'}
+          onDragStart={()=>{dragOrigin.current=groupLayout.map(l=>({...l}));}}
           onDragStop={(_layout,_oldItem,newItem)=>{
             // Both modes restore the pre-drag layout first: the grid library's live compaction leaves panes straddling columns and pushed below the viewport.
             const target=dropTarget(dragOrigin.current,newItem),restored=(w:Workspace)=>({...w,layout:dragOrigin.current});
-            update(w=>!target?restored(w):moveMode==='swap'?swapPane(restored(w),newItem.i,target.i):reorderPane(restored(w),newItem.i,target.i));
+            update(w=>scoped(w,ids,g=>!target?restored(g):moveMode==='swap'?swapPane(restored(g),newItem.i,target.i):reorderPane(restored(g),newItem.i,target.i)));
           }}
-          onResizeStop={layout=>update(w=>({...w,layout:layout.map(l=>({i:l.i,x:l.x,y:l.y,w:l.w,h:l.h,minW:3,minH:3}))}))}>
-          {workspace.panes.map(p=><div key={p.id} id={`pane-${p.id}`} data-pane-id={p.id} data-pane-title={p.title} data-color={p.color||''} className={`pane ${p.type==='powershell-admin'?'admin-pane':''} ${focused===p.id?'focused':''} ${maximized===p.id?'maximized':''}`} onPointerDown={()=>{if(focused!==p.id)setFocused(p.id);}}>
+          onResizeStop={layout=>update(w=>scoped(w,ids,g=>({...g,layout:layout.map(l=>({i:l.i,x:l.x,y:l.y,w:l.w,h:l.h,minW:3,minH:3}))})))}>
+          {list.map(p=><div key={p.id} id={`pane-${p.id}`} data-pane-id={p.id} data-pane-title={p.title} data-color={p.color||''} className={`pane ${p.type==='powershell-admin'?'admin-pane':''} ${focused===p.id?'focused':''} ${maximized===p.id?'maximized':''}`} onPointerDown={()=>{if(focused!==p.id)setFocused(p.id);}}>
             <header className="pane-header"><div className="pane-drag-handle" title={workspace.locked?'Layout locked':'Drag to arrange'}><GripVertical size={12}/><PaneIcon type={p.type} size={14}/><strong title={p.title}>{p.title}</strong></div>{(()=>{const b=badge(p);return b?<span className={`pane-badge ${b.cls}`}>{b.text}</span>:null;})()}<span className={`pane-status ${getStatus(p.id)}`} title={statuses[p.id]?.message}><span className={`status-dot ${getStatus(p.id)}`}/>{p.type==='powershell-admin'&&getStatus(p.id)==='running'?'Admin':getStatus(p.id)==='idle'?'Ready':getStatus(p.id)}</span><div className="pane-actions"><button aria-label={`Configure ${p.title}`} title="Configure and rename" onClick={()=>setEditor(p)}><Settings2 size={13}/></button><button aria-label={`Duplicate ${p.title}`} title="Duplicate configuration" onClick={()=>copyPane(p)}><Copy size={12}/></button><button aria-label={maximized===p.id?`Restore ${p.title}`:`Maximize ${p.title}`} title="Focus pane" onClick={()=>{setMaximized(maximized===p.id?'':p.id);setFocused(p.id);}}>{maximized===p.id?<Minimize2 size={13}/>:<Maximize2 size={13}/>}</button><button aria-label={`Close ${p.title}`} title={pinned(p)?'Turn Orchestrate off to close this pane':'Close pane'} disabled={pinned(p)} onClick={()=>void closePane(p)}><X size={13}/></button></div></header>
             <button className="pane-directory" title={`${p.cwd}\nClick to change folder`} aria-label={`Change folder for ${p.title}`} onClick={()=>void changeFolder(p)}><FolderOpen size={11}/><span>{p.cwd}</span>{p.type==='powershell-admin'&&<span className="admin-label">UAC session</span>}</button>
             {p.type==='vault'?<VaultPane pane={p} profiles={state.profiles} workspaces={state.workspaces.map(w=>({id:w.id,name:w.name}))} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))} onLaunch={launchProject} onLoadWorkspace={id=>void switchWorkspace(id)}/>:p.type==='local-model'?<LocalPane pane={p} profiles={state.profiles} onProfile={profileId=>update(w=>({...w,panes:w.panes.map(x=>x.id===p.id?{...x,profileId}:x)}))} onEditProfile={profileId=>setProfileEditor(state.profiles.find(x=>x.id===profileId)||null)} onStatus={(status,message)=>setStatuses(prev=>({...prev,[p.id]:{paneId:p.id,kind:'status',status,message}}))}/>:<TerminalPane pane={p} locked={locked(p)} status={getStatus(p.id)} focused={focused===p.id} message={statuses[p.id]?.message} relaunch={relaunch[p.id]||0} onError={report}/>}
           </div>)}
         </GridLayout>
+        </div>;})}
       </div>
     </main>
     <footer className="app-statusbar"><span><span className="status-dot running"/>{orchestrate.on?`Orchestrate · ${counts('working')} working · ${counts('waiting')} waiting · ${counts('done')} done`:'Local terminal cockpit'}</span><span>{workspace.locked?'Layout locked':'Layout editable'}<span className="statusbar-separator">|</span><span className="save-state" title={statePath?`Saved to ${statePath}`:'Saved on this computer'}><Check size={11}/>{saveLabel}</span></span></footer>
