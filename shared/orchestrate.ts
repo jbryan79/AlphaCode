@@ -27,6 +27,12 @@ export function conflicts(a: string, b: string): boolean {
 export const WORKER_ALLOW = ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git branch --show-current)', 'Bash(alphacode report:*)'];
 /** The orchestrator drives the run, reviews diffs and merges. */
 export const ORCHESTRATOR_ALLOW = ['Bash(alphacode:*)', 'Bash(git:*)'];
+/** True when `dir` is `root` or inside it (Windows paths, case-insensitive). */
+export function insideRoot(root: string, dir: string): boolean {
+  const n = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const r = n(root), d = n(dir);
+  return !!r && (d === r || d.startsWith(r + '/'));
+}
 export function validatePlan(value: unknown, limits: { maxWorkers: number; workerPanes: number }): Plan {
   const p = value as Plan; if (!p || typeof p !== 'object' || !Array.isArray(p.tasks)) fail('A plan is an object with a tasks array');
   const max = Math.max(0, Math.min(limits.maxWorkers, limits.workerPanes)); if (p.tasks.length < 1 || p.tasks.length > max) fail(`A plan has 1 to ${max} tasks`);

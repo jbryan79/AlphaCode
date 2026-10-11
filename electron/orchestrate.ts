@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { OrchestrateEvent, OrchestrateRoles, PaneConfig, Plan, Task } from '../shared/types';
-import { ORCHESTRATOR_ALLOW, WORKER_ALLOW, lastLines as tail, promptHeader, stripAnsi, transition, validatePlan, type Signal } from '../shared/orchestrate';
+import { ORCHESTRATOR_ALLOW, WORKER_ALLOW, insideRoot, lastLines as tail, promptHeader, stripAnsi, transition, validatePlan, type Signal } from '../shared/orchestrate';
 import { validateId } from '../shared/domain';
 import type { LaunchOverrides } from './terminals';
 export type { LaunchOverrides };
@@ -41,6 +41,8 @@ export class OrchestrateRun {
     await new Promise<void>(resolve => { if (!server) return resolve(); server.close(() => resolve()); server.closeAllConnections(); });
     await rm(this.deps.runDir, { recursive: true, force: true }); this.deps.emit({ kind: 'off' });
   }
+  /** The orchestrated project root when this pane is not part of the run but would start inside it, else ''. Only the run's own panes may work in that folder. */
+  reservedRoot(paneId: string, cwd: string): string { return this.roleOf(paneId) === 'none' && insideRoot(this.deps.roles.root, cwd) ? this.deps.roles.root : ''; }
   private pathEnv() { return { PATH: `${this.deps.runDir};${process.env.PATH || ''}` }; }
   overrides(paneId: string): LaunchOverrides | null {
     const { roles } = this.deps;

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import GridLayout, { type Layout } from 'react-grid-layout';
 import { Plus, FolderOpen, ChevronDown, GripVertical, Settings2, Maximize2, Minimize2, Copy, X, Lock, Unlock, Shield, Terminal, Cpu, PanelLeft, ArrowUp, ArrowDown, Download, Upload, Check, AlertCircle, Pencil, Brain, Workflow } from 'lucide-react';
 import { addPane, applyPreset, balancedLayout, createPane, defaultState, dropTarget, duplicatePane, fillSinglePane, id, moveWorkspace, PANE_TYPES, PRESETS, removePane, reorderPane, swapPane } from '../shared/domain';
-import { emptyOrchestrate, TASK_LABELS } from '../shared/orchestrate';
+import { emptyOrchestrate, insideRoot, TASK_LABELS } from '../shared/orchestrate';
 import type { AppState, GridItem, LocalProfile, OrchestrateEvent, OrchestrateRoles, PaneConfig, PaneType, SessionEvent, SessionStatus, Task, VaultInfo, VaultTarget, Workspace } from '../shared/types';
 import TerminalPane from './TerminalPane';
 import LocalPane from './LocalPane';
@@ -64,7 +64,7 @@ export default function App() {
     try{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);if(orchestrate.on&&p.id===orchestrate.orchestratorPaneId)await orchestrateOff();update(w=>removePane(w,p.id));if(maximized===p.id)setMaximized('');}catch(e){report(String(e));}
   };
   const savePane=async(p:PaneConfig)=>{
-    const old=workspace?.panes.find(x=>x.id===p.id);if(!old)return;
+    const old=workspace?.panes.find(x=>x.id===p.id);if(!old)return;if(p.cwd!==old.cwd&&reserved(p.id,p.cwd))return;
     const launchChanged=old.type!==p.type||old.cwd!==p.cwd||old.command!==p.command||JSON.stringify(old.args)!==JSON.stringify(p.args);
     const wasActive=isActive(p.id),restartable=p.type!=='powershell-admin'&&p.type!=='local-model'&&p.type!=='vault';
     if(launchChanged&&wasActive&&!window.confirm(restartable?'Apply this configuration? The current session ends and a new one starts in its place.':'Apply this configuration and stop the current session?'))return;
@@ -79,9 +79,9 @@ export default function App() {
     const base=createPane(type,cwd||workspace.root,type==='local-model'||type==='vault'?state?.profiles[0]?.id:'');
     const pane={...base,title:cwd?.split(/[\\/]/).filter(Boolean).pop()||base.title,autoStart:false};update(w=>addPane(w,pane));setFocused(pane.id);if(!cwd)setEditor(pane);setAddOpen(false);
   };
-  const launchProject=(t:VaultTarget)=>{if(!workspace||workspace.panes.length>=32){report('A workspace supports up to 32 panes.');return;}const pane={...createPane('claude',t.path),title:t.name,autoStart:true};update(w=>addPane(w,pane));setFocused(pane.id);};
-  const addFromFolder=async()=>{setAddOpen(false);try{const cwd=await window.bridge.chooseDirectory();if(cwd)add('claude',cwd);}catch(e){report(String(e));}};
-  const changeFolder=async(p:PaneConfig)=>{try{const cwd=await window.bridge.chooseDirectory();if(cwd&&cwd!==p.cwd)await savePane({...p,cwd});}catch(e){report(String(e));}};
+  const launchProject=(t:VaultTarget)=>{if(!workspace||workspace.panes.length>=32){report('A workspace supports up to 32 panes.');return;}if(reserved('',t.path))return;const pane={...createPane('claude',t.path),title:t.name,autoStart:true};update(w=>addPane(w,pane));setFocused(pane.id);};
+  const addFromFolder=async()=>{setAddOpen(false);try{const cwd=await window.bridge.chooseDirectory();if(cwd&&!reserved('',cwd))add('claude',cwd);}catch(e){report(String(e));}};
+  const changeFolder=async(p:PaneConfig)=>{try{const cwd=await window.bridge.chooseDirectory();if(cwd&&cwd!==p.cwd&&!reserved(p.id,cwd))await savePane({...p,cwd});}catch(e){report(String(e));}};
   const closeAll=async()=>{
     if(orchestrate.on){report("Turn Orchestrate off before closing all panes; closing them would break the run.");return;}
     if(!workspace?.panes.length||!window.confirm(`Close all ${workspace.panes.length} panes and end their sessions?`))return;
@@ -114,6 +114,8 @@ export default function App() {
   };
   const orchestrateOff=async()=>{try{await window.bridge.orchestrateStop();}catch(e){report(String(e));}update(w=>({...w,orchestrate:{...(w.orchestrate||emptyOrchestrate()),on:false,approved:false,tasks:[]}}));setOrch({approved:false,tasks:[],finished:''});};
   const taskFor=(paneId:string)=>orch.tasks.find(t=>t.paneId===paneId);
+  // The run owns its project folder: nothing else may start a session there from inside AlphaCode (an outside terminal still can).
+  const reserved=(paneId:string,cwd:string)=>{const root=workspace?.panes.find(x=>x.id===orchestrate.orchestratorPaneId)?.cwd;const own=paneId===orchestrate.orchestratorPaneId||orch.tasks.some(t=>t.paneId===paneId);if(!orchestrate.on||!root||own||!insideRoot(root,cwd))return false;report(`${root} is being orchestrated. Start other work in a different folder, or turn Orchestrate off.`);return true;};
   // While Orchestrate is on, its Claude panes belong to the run: they cannot be closed, and workers take no typing except to answer a permission prompt (waiting) or after they finish.
   const pinned=(p:PaneConfig)=>orchestrate.on&&p.type==='claude';
   const locked=(p:PaneConfig)=>{if(!pinned(p)||p.id===orchestrate.orchestratorPaneId)return false;const t=taskFor(p.id);return !t||t.state==='planned'||t.state==='working'||t.state==='attention';};

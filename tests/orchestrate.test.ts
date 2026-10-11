@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conflicts, emptyOrchestrate, lastLines, normalizeFile, promptHeader, stripAnsi, transition, validateOrchestrate, validatePlan } from '../shared/orchestrate';
+import { conflicts, emptyOrchestrate, insideRoot, lastLines, normalizeFile, promptHeader, stripAnsi, transition, validateOrchestrate, validatePlan } from '../shared/orchestrate';
 import { applyPreset, validateWorkspace } from '../shared/domain';
 import type { Task, Workspace } from '../shared/types';
 
@@ -423,5 +423,16 @@ describe('vault run notes', () => {
     expect(file).toBe(join(root, 'vault', 'AlphaCode Runs', '2026-10-10 add export_ endpoint_.md')); expect(await readFile(file, 'utf8')).toContain('body');
     expect(await vault.writeNote('AlphaCode Runs', '2026-10-10 add export: endpoint?', 'again')).toBe(join(root, 'vault', 'AlphaCode Runs', '2026-10-10 add export_ endpoint_ (2).md'));
     await expect(vault.writeNote('../x', 'n', 't')).rejects.toThrow(); await rm(root, { recursive: true, force: true });
+  });
+});
+describe('insideRoot', () => {
+  it('matches the root and its subfolders only, ignoring case and slash style', () => {
+    const root = String.fromCharCode(68, 58, 92) + 'Dev' + String.fromCharCode(92) + 'ACO';
+    expect(insideRoot(root, 'd:/dev/aco')).toBe(true);
+    expect(insideRoot(root, root + String.fromCharCode(92) + '.claude' + String.fromCharCode(92) + 'task-a')).toBe(true);
+    expect(insideRoot(root + String.fromCharCode(92), 'D:/Dev/ACO')).toBe(true);
+    expect(insideRoot(root, 'D:/Dev/ACO-plan2')).toBe(false);
+    expect(insideRoot(root, 'D:/Dev')).toBe(false);
+    expect(insideRoot('', 'D:/Dev')).toBe(false);
   });
 });
