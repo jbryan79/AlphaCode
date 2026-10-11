@@ -124,7 +124,7 @@ describe('OrchestrateRun launch overrides', () => {
     const f = await fixture();
     const o = f.run.overrides('p1')!;
     expect(o.env!.ALPHACODE_CONTROL_URL).toBe(`http://127.0.0.1:${f.run.port}`); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBe(f.run.controlToken); expect(o.env!.ALPHACODE_RUN_DIR).toBe(f.runDir);
-    expect(o.env!.PATH!.split(';')[0]).toBe(f.runDir); expect(o.args).toEqual(['--model', 'fable', '--settings', join(f.runDir, 'orchestrator.json'), '--append-system-prompt-file', 'C:\\Data\\orchestrate.md', '--name', 'Orchestrator', '--disallowedTools', 'Agent']);
+    expect(o.env!.PATH!.split(';')[0]).toBe(f.runDir); expect(o.args).toEqual(['--model', 'fable', '--fallback-model', 'opus', '--settings', join(f.runDir, 'orchestrator.json'), '--append-system-prompt-file', 'C:\\Data\\orchestrate.md', '--name', 'Orchestrator', '--disallowedTools', 'Agent']);
     expect(o.env!.ALPHACODE_HOOK_TOKEN).toBeUndefined();
     expect(f.run.overrides('p1')).toEqual(o); // stable across restarts in the same run
     expect(f.run.overrides('p4')).toBeNull(); expect(f.run.overrides('p2')).toBeNull(); // idle worker gets nothing

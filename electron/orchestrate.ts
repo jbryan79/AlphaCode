@@ -46,12 +46,12 @@ export class OrchestrateRun {
   private pathEnv() { return { PATH: `${this.deps.runDir};${process.env.PATH || ''}` }; }
   overrides(paneId: string): LaunchOverrides | null {
     const { roles } = this.deps;
-    if (paneId === roles.orchestratorPaneId) return { env: { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_CONTROL_TOKEN: this.controlToken, ALPHACODE_RUN_DIR: this.deps.runDir }, args: ['--model', 'fable', '--settings', join(this.deps.runDir, 'orchestrator.json'), '--append-system-prompt-file', this.deps.playbookPath, '--name', 'Orchestrator', '--disallowedTools', 'Agent'] };
+    if (paneId === roles.orchestratorPaneId) return { env: { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_CONTROL_TOKEN: this.controlToken, ALPHACODE_RUN_DIR: this.deps.runDir }, args: ['--model', 'fable', '--fallback-model', 'opus', '--settings', join(this.deps.runDir, 'orchestrator.json'), '--append-system-prompt-file', this.deps.playbookPath, '--name', 'Orchestrator', '--disallowedTools', 'Agent'] };
     const l = this.live.get(paneId); if (!l || !this.launching.has(paneId)) return null;
     const env = { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_HOOK_TOKEN: l.hookToken, ALPHACODE_PANE_ID: paneId, ALPHACODE_RUN_DIR_SHIM: this.deps.runDir };
     const read = `Read the file ${l.promptFile} and carry out the task it describes.`;
     if (l.task.retries > 0 && l.task.worktree) return { env, cwd: l.task.worktree, args: ['--resume', l.task.sessionId, '--settings', l.hooksFile, read] };
-    return { env, args: ['--worktree', `task-${l.task.id}`, '--model', l.task.model, '--name', l.task.title, '--settings', l.hooksFile, '--session-id', l.task.sessionId, read] };
+    return { env, args: ['--worktree', `task-${l.task.id}`, '--model', l.task.model, ...(l.task.model === 'fable' ? ['--fallback-model', 'opus'] : []), '--name', l.task.title, '--settings', l.hooksFile, '--session-id', l.task.sessionId, read] };
   }
   tap(paneId: string, data: string): void { const next = (this.rings.get(paneId) || '') + data; this.rings.set(paneId, next.length > RING ? next.slice(-RING) : next); }
   lastLines(paneId: string): string[] { return tail(stripAnsi(this.rings.get(paneId) || ''), 20); }
