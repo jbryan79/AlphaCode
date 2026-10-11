@@ -15,7 +15,7 @@ export interface VaultGraph { nodes: { id: string; label: string; project: strin
 export interface VaultTarget { kind: 'project' | 'obsidian' | 'workspace'; name: string; path: string; tier?: 0 | 1 | 2; }
 export type TaskState = 'planned' | 'working' | 'waiting' | 'attention' | 'done' | 'failed' | 'interrupted';
 export type TaskModel = 'sonnet' | 'opus' | 'fable';
-export interface PlanTask { id: string; title: string; files: string[]; model: TaskModel; minutes: number; advisor: boolean; prompt: string; }
+export interface PlanTask { id: string; title: string; files: string[]; model: TaskModel; minutes: number; advisor: boolean; prompt: string; allow?: string[]; dirs?: string[]; }
 export interface Plan { tests: string; approved: boolean; tasks: PlanTask[]; }
 /** Persisted task. `prompt` is never persisted; the run holds it in memory. */
 export interface Task extends Omit<PlanTask, 'prompt'> { state: TaskState; paneId: string; branch: string; worktree: string; startedAt: string; finishedAt: string; retries: number; sessionId: string; message: string; hidden: boolean; }

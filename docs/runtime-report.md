@@ -67,7 +67,11 @@ The steps below have not been run. They need a person at the keyboard to answer 
 11. Confirm that the Tasks row shows the worker's branch within a few seconds of `task start` (the lookup repeats on reports and status calls until Claude has created the worktree).
 12. Confirm that a worker can run `alphacode report done` from its Bash tool (Git Bash finds the extensionless `alphacode` shim in the run folder).
 13. Confirm that `alphacode task retry` into a live worker actually submits the feedback (text and Enter are sent as separate writes about 100 ms apart).
-14. In the same mode session, make a second request after the first run finishes. Confirm that the orchestrator asks for "go" again before starting workers, and that `alphacode finish` works a second time.
+14. In the same mode session, make a second request after the first run finishes. Confirm that the orchestrator runs preflight again and starts workers without asking for "go", and that `alphacode finish` works a second time.
+15. Confirm the orchestrator pane runs on Fable (`/model` in the pane) and its agent list shows only `main`.
+16. Confirm preflight runs the project build and test commands once and sends a single message only when something is unresolved.
+17. Confirm a worker running a command from its task `allow` list (for example `dotnet test`) is not stopped on a permission prompt, and that a command outside the list shows `waiting` with the command in `alphacode task status`.
+18. Confirm `--settings` permissions (`allow`, `additionalDirectories`) merge with the rules in `~/.claude/settings.json` rather than replacing them.
 
 ### Not verified
 

@@ -26,6 +26,8 @@ describe('plan validation', () => {
     expect(() => validatePlan(plan([t('a', ['x'], { minutes: 0 })]), limits)).toThrow(/minutes/);
     expect(() => validatePlan(plan([t('a', ['x']), t('a', ['y'])]), limits)).toThrow(/duplicate/i);
     expect(() => validatePlan(plan([]), limits)).toThrow(/1 to 5/);
+    expect(validatePlan(plan([t('a', ['x'], { allow: ['Bash(dotnet test:*)'], dirs: ['D:/data'] })]), limits).tasks[0]).toMatchObject({ allow: ['Bash(dotnet test:*)'], dirs: ['D:/data'] });
+    expect(() => validatePlan(plan([t('a', ['x'], { allow: 'dotnet' })]), limits)).toThrow(/allow/);
     expect(() => validatePlan(plan([t('a', ['a']), t('b', ['b']), t('c', ['c'])]), { maxWorkers: 5, workerPanes: 2 })).toThrow(/1 to 2/);
     expect(() => validatePlan(plan([t('a', ['x'], { prompt: '' })]), limits)).toThrow(/prompt/);
   });
@@ -122,7 +124,7 @@ describe('OrchestrateRun launch overrides', () => {
     const f = await fixture();
     const o = f.run.overrides('p1')!;
     expect(o.env!.ALPHACODE_CONTROL_URL).toBe(`http://127.0.0.1:${f.run.port}`); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBe(f.run.controlToken); expect(o.env!.ALPHACODE_RUN_DIR).toBe(f.runDir);
-    expect(o.env!.PATH!.split(';')[0]).toBe(f.runDir); expect(o.args).toEqual(['--append-system-prompt-file', 'C:\\Data\\orchestrate.md', '--name', 'Orchestrator']);
+    expect(o.env!.PATH!.split(';')[0]).toBe(f.runDir); expect(o.args).toEqual(['--model', 'fable', '--settings', join(f.runDir, 'orchestrator.json'), '--append-system-prompt-file', 'C:\\Data\\orchestrate.md', '--name', 'Orchestrator', '--disallowedTools', 'Agent']);
     expect(o.env!.ALPHACODE_HOOK_TOKEN).toBeUndefined();
     expect(f.run.overrides('p1')).toEqual(o); // stable across restarts in the same run
     expect(f.run.overrides('p4')).toBeNull(); expect(f.run.overrides('p2')).toBeNull(); // idle worker gets nothing

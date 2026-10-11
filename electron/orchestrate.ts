@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { OrchestrateEvent, OrchestrateRoles, PaneConfig, Plan, Task } from '../shared/types';
-import { lastLines as tail, promptHeader, stripAnsi, transition, validatePlan, type Signal } from '../shared/orchestrate';
+import { ORCHESTRATOR_ALLOW, WORKER_ALLOW, lastLines as tail, promptHeader, stripAnsi, transition, validatePlan, type Signal } from '../shared/orchestrate';
 import { validateId } from '../shared/domain';
 import type { LaunchOverrides } from './terminals';
 export type { LaunchOverrides };
@@ -31,6 +31,7 @@ export class OrchestrateRun {
     // Claude Code's Bash tool is Git Bash, which does not find a .cmd by bare name: give it an extensionless sh shim too.
     const posix = (p: string) => p.replace(/\\/g, '/');
     await writeFile(join(this.deps.runDir, 'alphacode'), `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${posix(this.deps.execPath)}" "${posix(this.deps.cliPath)}" "$@"\n`, 'utf8');
+    await writeFile(join(this.deps.runDir, 'orchestrator.json'), JSON.stringify({ permissions: { allow: ORCHESTRATOR_ALLOW, additionalDirectories: [this.deps.runDir] } }), 'utf8');
     this.server = createServer((req, res) => void this.handle(req, res).catch(e => this.reply(res, 500, { error: (e as Error).message })));
     await new Promise<void>((resolve, reject) => this.server!.once('error', reject).listen(0, '127.0.0.1', resolve));
     this.port = (this.server.address() as { port: number }).port; return this.port;
@@ -43,7 +44,7 @@ export class OrchestrateRun {
   private pathEnv() { return { PATH: `${this.deps.runDir};${process.env.PATH || ''}` }; }
   overrides(paneId: string): LaunchOverrides | null {
     const { roles } = this.deps;
-    if (paneId === roles.orchestratorPaneId) return { env: { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_CONTROL_TOKEN: this.controlToken, ALPHACODE_RUN_DIR: this.deps.runDir }, args: ['--append-system-prompt-file', this.deps.playbookPath, '--name', 'Orchestrator'] };
+    if (paneId === roles.orchestratorPaneId) return { env: { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_CONTROL_TOKEN: this.controlToken, ALPHACODE_RUN_DIR: this.deps.runDir }, args: ['--model', 'fable', '--settings', join(this.deps.runDir, 'orchestrator.json'), '--append-system-prompt-file', this.deps.playbookPath, '--name', 'Orchestrator', '--disallowedTools', 'Agent'] };
     const l = this.live.get(paneId); if (!l || !this.launching.has(paneId)) return null;
     const env = { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_HOOK_TOKEN: l.hookToken, ALPHACODE_PANE_ID: paneId, ALPHACODE_RUN_DIR_SHIM: this.deps.runDir };
     const read = `Read the file ${l.promptFile} and carry out the task it describes.`;
@@ -107,7 +108,7 @@ export class OrchestrateRun {
     this.launching.add(id);
     // The prompt travels as a file: argv through claude.cmd and cmd.exe truncates at a newline and caps at 32,767 characters.
     l.promptFile = join(this.deps.runDir, signal === 'start' ? `task-${l.task.id}.md` : `task-${l.task.id}-retry-${l.task.retries}.md`);
-    try { await writeFile(l.hooksFile, this.hooksJson(), 'utf8'); await writeFile(l.promptFile, signal === 'start' ? promptHeader(l.task) + l.prompt : l.prompt, 'utf8'); await this.deps.launch(id); this.launched.add(id); this.signal(id, signal); }
+    try { await writeFile(l.hooksFile, this.hooksJson(l.task), 'utf8'); await writeFile(l.promptFile, signal === 'start' ? promptHeader(l.task) + l.prompt : l.prompt, 'utf8'); await this.deps.launch(id); this.launched.add(id); this.signal(id, signal); }
     // A failed first launch goes back to Planned so `task start` can try again; a failed resume stays Failed for retry.
     catch (error) { this.launching.delete(id); l.task.state = signal === 'start' ? 'planned' : 'failed'; l.task.message = (error as Error).message; this.bump(); throw error; }
     this.launching.delete(id); await this.locate(l); return l.task;
@@ -174,7 +175,7 @@ export class OrchestrateRun {
   approve(): void { if (this.plan) { this.plan.approved = true; this.bump(); } }
   protected authorized(req: IncomingMessage, expected: string): boolean { const got = (req.headers.authorization || '').replace(/^Bearer\s+/i, ''); return got.length === expected.length && timingSafeEqual(Buffer.from(got), Buffer.from(expected)); }
   protected mintTask(task: Task, prompt: string): Live { const hookToken = token(); return { task, prompt, hookToken, hooksFile: join(this.deps.runDir, `hooks-${task.paneId}.json`) }; }
-  protected hooksJson(): string { const shim = join(this.deps.runDir, 'alphacode.cmd').replace(/\\/g, '/'); const hook = (k: string) => [{ hooks: [{ type: 'command', command: `"${shim}" report ${k}` }] }]; return JSON.stringify({ hooks: { Stop: hook('stop'), Notification: hook('waiting') } }); }
+  protected hooksJson(t: Pick<Task, 'allow' | 'dirs'>): string { const shim = join(this.deps.runDir, 'alphacode.cmd').replace(/\\/g, '/'); const hook = (k: string) => [{ hooks: [{ type: 'command', command: `"${shim}" report ${k}` }] }]; return JSON.stringify({ hooks: { Stop: hook('stop'), Notification: hook('waiting') }, permissions: { allow: [...WORKER_ALLOW, ...(t.allow || [])], additionalDirectories: [this.deps.runDir, ...(t.dirs || [])] } }); }
   protected uuid(): string { return randomUUID(); }
   protected ensureId(id: string): string { return validateId(id); }
 }

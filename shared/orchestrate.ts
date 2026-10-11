@@ -23,6 +23,10 @@ export function conflicts(a: string, b: string): boolean {
   const under = (dir: string, file: string) => dir.endsWith('/') && file.startsWith(dir);
   return under(x, y) || under(y, x);
 }
+/** Permission rules every worker gets: commit its own work and report. The orchestrator adds the project's build and test commands per task (`allow`). */
+export const WORKER_ALLOW = ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git branch --show-current)', 'Bash(alphacode report:*)'];
+/** The orchestrator drives the run, reviews diffs and merges. */
+export const ORCHESTRATOR_ALLOW = ['Bash(alphacode:*)', 'Bash(git:*)'];
 export function validatePlan(value: unknown, limits: { maxWorkers: number; workerPanes: number }): Plan {
   const p = value as Plan; if (!p || typeof p !== 'object' || !Array.isArray(p.tasks)) fail('A plan is an object with a tasks array');
   const max = Math.max(0, Math.min(limits.maxWorkers, limits.workerPanes)); if (p.tasks.length < 1 || p.tasks.length > max) fail(`A plan has 1 to ${max} tasks`);
@@ -34,7 +38,8 @@ export function validatePlan(value: unknown, limits: { maxWorkers: number; worke
     if (!MODELS.includes(v.model)) fail(`Task ${id}: model must be one of ${MODELS.join(', ')}`);
     if (!Number.isInteger(v.minutes) || v.minutes < 1 || v.minutes > 240) fail(`Task ${id}: minutes must be 1 to 240`);
     const prompt = str(v.prompt, 'task prompt', 65536); if (!prompt.trim()) fail(`Task ${id}: prompt is empty`);
-    return { id, title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, prompt };
+    const list = (x: any, what: string): string[] => { if (x === undefined) return []; if (!Array.isArray(x) || x.length > 100) fail(`Task ${id}: ${what} is a list of up to 100 strings`); return x.map((e: unknown) => str(e, what, 300)); };
+    return { id, allow: list(v.allow, 'allow'), dirs: list(v.dirs, 'dirs'), title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, prompt };
   });
   const ids = new Set(tasks.map(t => t.id)); if (ids.size !== tasks.length) fail('Duplicate task ids');
   for (let i = 0; i < tasks.length; i++) for (let j = i + 1; j < tasks.length; j++) for (const a of tasks[i].files) for (const b of tasks[j].files) if (conflicts(a, b)) fail(`File ${b} is claimed by both ${tasks[i].id} and ${tasks[j].id}`);
