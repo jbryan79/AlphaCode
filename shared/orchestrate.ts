@@ -68,6 +68,8 @@ export const promptHeader = (t: Pick<Task, 'id' | 'minutes' | 'files'>): string 
   `Task ${t.id} in worktree task-${t.id} (Claude Code created it; run git branch --show-current to see your branch). Budget: ${t.minutes} minutes.\n` +
   `Commit to this branch only. Do not edit files outside this worktree.\n` +
   `Files you own: ${t.files.join(', ')}. Do not touch any other file; if the task needs one, say so and stop.\n` +
+  `Your work record: before you report, write docs/orchestrate/${t.id}.md in this worktree and commit it (this one file is yours even though it is not listed above). ` +
+  `It states what you did, the files you changed, how you verified it (commands and results), and anything left undone or uncertain. Write it even if you cannot finish.\n` +
   `When finished run: alphacode report done\nIf you cannot finish run: alphacode report failed "<one line reason>"\n\n`;
 // eslint-disable-next-line no-control-regex
 export const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][A-Za-z0-9]/g, '');

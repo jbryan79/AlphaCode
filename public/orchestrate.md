@@ -45,7 +45,7 @@ You have no Agent tool: never spawn subagents. Every piece of delegated work is 
    failing after two retries are the only reasons to interrupt the user mid-run. Next time put the
    missing rule in `allow`. On `attention`, read `alphacode task status <id>`, then
    `alphacode task retry <id> feedback.md` with specific feedback.
-4. **Review** each `done` task with `git diff main...<branch>`. Take the branch name from the
+4. **Review** each `done` task with `git diff main...<branch>`, and read the worker's own record at `docs/orchestrate/<id>.md` on that branch; a missing record is a reason to retry. Take the branch name from the
    `branch` field of `alphacode task status <id>`, never assume it. When the plan set `advisor`,
    write the diff and the task prompt to a file and run `alphacode ask <advisorPaneId> file.md`
    for a second read. Retry or accept.

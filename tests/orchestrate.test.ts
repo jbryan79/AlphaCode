@@ -61,7 +61,7 @@ describe('prompt header and output helpers', () => {
   it('names the task, worktree, budget, owned files and the report commands', () => {
     const h = promptHeader(task({ files: ['a.ts', 'b/'] }));
     expect(h).toContain('Task api in worktree task-api'); expect(h).toContain('Budget: 20 minutes'); expect(h).toContain('Files you own: a.ts, b/');
-    expect(h).toContain('alphacode report done'); expect(h).toContain('alphacode report failed'); expect(h.endsWith('\n\n')).toBe(true);
+    expect(h).toContain('docs/orchestrate/api.md'); expect(h).toContain('alphacode report done'); expect(h).toContain('alphacode report failed'); expect(h.endsWith('\n\n')).toBe(true);
   });
   it('strips ANSI and returns the last lines', () => {
     expect(stripAnsi('\x1b[31mred\x1b[0m\r\nplain')).toBe('red\r\nplain');
