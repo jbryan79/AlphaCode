@@ -23,6 +23,7 @@ describe('plan validation', () => {
     expect(() => validatePlan(plan([t('a', ['../x'])]), limits)).toThrow(/outside the repository/);
     expect(() => validatePlan(plan([t('a', ['C:/x'])]), limits)).toThrow(/outside the repository/);
     expect(() => validatePlan(plan([t('a', ['x'], { model: 'gpt' })]), limits)).toThrow(/model/);
+    expect(validatePlan(plan([t('a', ['x'], { model: 'haiku' }), t('b', ['y'], { model: 'opus' })]), limits).tasks.map(x => x.model)).toEqual(['haiku', 'opus']);
     expect(() => validatePlan(plan([t('a', ['x'], { minutes: 0 })]), limits)).toThrow(/minutes/);
     expect(() => validatePlan(plan([t('a', ['x']), t('a', ['y'])]), limits)).toThrow(/duplicate/i);
     expect(() => validatePlan(plan([]), limits)).toThrow(/1 to 5/);

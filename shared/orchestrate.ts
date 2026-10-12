@@ -1,7 +1,7 @@
 import type { OrchestrateConfig, Plan, PlanTask, Task, TaskModel, TaskState } from './types';
 import { string as str, validateId } from './domain';
 
-export const MODELS: readonly TaskModel[] = ['sonnet', 'opus', 'fable'];
+export const MODELS: readonly TaskModel[] = ['haiku', 'sonnet', 'opus', 'fable'];
 export const TASK_STATES: readonly TaskState[] = ['planned', 'working', 'waiting', 'attention', 'done', 'failed', 'interrupted'];
 export const TASK_LABELS: Record<TaskState, string> = { planned: 'Planned', working: 'Working', waiting: 'Waiting', attention: 'Needs attention', done: 'Task done', failed: 'Failed', interrupted: 'Interrupted' };
 export type Signal = 'start' | 'waiting' | 'typed' | 'stop' | 'retry' | 'done' | 'failed' | 'exit';

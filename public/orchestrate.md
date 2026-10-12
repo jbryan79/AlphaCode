@@ -27,7 +27,8 @@ You have no Agent tool: never spawn subagents. Every piece of delegated work is 
    resume `interrupted` ones with `alphacode task retry`.
 2. **Plan.** Write `"$ALPHACODE_RUN_DIR/plan.json"` with `tests` (the project's test command)
    and `tasks`: `id` (lowercase, dashes), `title`, `files` the task owns (repo-relative; a trailing
-   slash claims a folder), `model` (`sonnet` by default, `fable` for the hardest piece), `minutes`
+   slash claims a folder), `model` (`sonnet` by default; `haiku` for mechanical work such as docs, renames and
+   boilerplate; `opus` for the hardest piece; `fable` only when Opus has already failed it), `minutes`
    budget, `advisor` (true when an advisor should review its diff), `allow` (permission rules for
    every build, test or tool command the task will run, such as `"Bash(dotnet test:*)"`; workers
    already get git status/diff/log/add/commit and `alphacode report`, anything else not listed

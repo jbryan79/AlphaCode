@@ -14,7 +14,7 @@ export interface VaultGraph { nodes: { id: string; label: string; project: strin
 /** `tier`: 0 exact, 1 prefix, 2 contains. Only exact and prefix matches may act without confirmation. */
 export interface VaultTarget { kind: 'project' | 'obsidian' | 'workspace'; name: string; path: string; tier?: 0 | 1 | 2; }
 export type TaskState = 'planned' | 'working' | 'waiting' | 'attention' | 'done' | 'failed' | 'interrupted';
-export type TaskModel = 'sonnet' | 'opus' | 'fable';
+export type TaskModel = 'haiku' | 'sonnet' | 'opus' | 'fable';
 export interface PlanTask { id: string; title: string; files: string[]; model: TaskModel; minutes: number; advisor: boolean; prompt: string; allow?: string[]; dirs?: string[]; }
 export interface Plan { tests: string; approved: boolean; tasks: PlanTask[]; }
 /** Persisted task. `prompt` is never persisted; the run holds it in memory. */
