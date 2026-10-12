@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell, type IpcMainInvokeEvent, type IpcMainEvent } from 'electron';
 import { join, resolve } from 'node:path';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { spawn } from 'node-pty';
@@ -87,7 +87,8 @@ function registerIpc():void{
     const workerPaneIds=(value.workerPaneIds||[]).slice(0,5).map(validateId);
     const resume=validateOrchestrate({...emptyOrchestrate(),tasks:Array.isArray(value.resume)?value.resume.filter(t=>workerPaneIds.includes(t?.paneId)).slice(0,5):[]},workerPaneIds).tasks.filter(t=>t.state==='interrupted');
     const roles:OrchestrateRoles={workspaceId:validateId(value.workspaceId),root:str(value.root,'project directory'),orchestratorPaneId:validateId(value.orchestratorPaneId),workerPaneIds,advisorPaneIds:(value.advisorPaneIds||[]).slice(0,5).map(validateId),maxWorkers:Math.min(5,Math.max(1,Number(value.maxWorkers)||5)),resume};
-    const playbookPath=join(app.getPath('userData'),'orchestrate.md');if(!existsSync(playbookPath))await copyFile(join(app.getAppPath(),'public','orchestrate.md'),playbookPath);
+    // Refreshed every run: a copy kept from an older install would hide playbook changes from the orchestrator.
+    const playbookPath=join(app.getPath('userData'),'orchestrate.md');await copyFile(join(app.getAppPath(),'public','orchestrate.md'),playbookPath);
     const prev=run;run=null;await prev?.stop().catch(()=>{});
     const r=new OrchestrateRun({runDir:join(app.getPath('userData'),'orchestrate',randomUUID()),execPath:process.execPath,cliPath:join(__dirname,'cli.js'),playbookPath,roles,panes:activePanes,git,
       launch:paneId=>new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>{if(pendingLaunches.delete(paneId))reject(new Error('Pane did not start within 20 seconds.'));},20000);pendingLaunches.set(paneId,{resolve:()=>{clearTimeout(timer);resolve();},reject:e=>{clearTimeout(timer);reject(e);}});emitOrchestrate({kind:'launch',paneId});}),

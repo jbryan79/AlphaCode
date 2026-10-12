@@ -2,6 +2,8 @@ import type { OrchestrateConfig, Plan, PlanTask, Task, TaskModel, TaskState } fr
 import { string as str, validateId } from './domain';
 
 export const MODELS: readonly TaskModel[] = ['haiku', 'sonnet', 'opus', 'fable'];
+/** Models a new plan may give a worker. Fable is kept for the orchestrator: --fallback-model does not cover a usage limit, so a Fable worker would stall when it runs out. */
+export const PLAN_MODELS: readonly TaskModel[] = ['haiku', 'sonnet', 'opus'];
 export const TASK_STATES: readonly TaskState[] = ['planned', 'working', 'waiting', 'attention', 'done', 'failed', 'interrupted'];
 export const TASK_LABELS: Record<TaskState, string> = { planned: 'Planned', working: 'Working', waiting: 'Waiting', attention: 'Needs attention', done: 'Task done', failed: 'Failed', interrupted: 'Interrupted' };
 export type Signal = 'start' | 'waiting' | 'typed' | 'stop' | 'retry' | 'done' | 'failed' | 'exit';
@@ -41,7 +43,7 @@ export function validatePlan(value: unknown, limits: { maxWorkers: number; worke
     if (!v || typeof v !== 'object') fail('Each task is an object');
     const id = str(v.id, 'task id', 32); if (!ID_RE.test(id)) fail(`Task id ${JSON.stringify(id)} must match ^[a-z0-9-]{1,32}$`);
     if (!Array.isArray(v.files) || v.files.length < 1 || v.files.length > 200) fail(`Task ${id}: files lists 1 to 200 entries`);
-    if (!MODELS.includes(v.model)) fail(`Task ${id}: model must be one of ${MODELS.join(', ')}`);
+    if (!PLAN_MODELS.includes(v.model)) fail(`Task ${id}: model must be one of ${PLAN_MODELS.join(', ')}`);
     if (!Number.isInteger(v.minutes) || v.minutes < 1 || v.minutes > 240) fail(`Task ${id}: minutes must be 1 to 240`);
     const prompt = str(v.prompt, 'task prompt', 65536); if (!prompt.trim()) fail(`Task ${id}: prompt is empty`);
     const list = (x: any, what: string): string[] => { if (x === undefined) return []; if (!Array.isArray(x) || x.length > 100) fail(`Task ${id}: ${what} is a list of up to 100 strings`); return x.map((e: unknown) => str(e, what, 300)); };

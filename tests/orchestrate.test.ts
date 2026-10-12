@@ -24,6 +24,7 @@ describe('plan validation', () => {
     expect(() => validatePlan(plan([t('a', ['C:/x'])]), limits)).toThrow(/outside the repository/);
     expect(() => validatePlan(plan([t('a', ['x'], { model: 'gpt' })]), limits)).toThrow(/model/);
     expect(validatePlan(plan([t('a', ['x'], { model: 'haiku' }), t('b', ['y'], { model: 'opus' })]), limits).tasks.map(x => x.model)).toEqual(['haiku', 'opus']);
+    expect(() => validatePlan(plan([t('a', ['x'], { model: 'fable' })]), limits)).toThrow(/haiku, sonnet, opus/);
     expect(() => validatePlan(plan([t('a', ['x'], { minutes: 0 })]), limits)).toThrow(/minutes/);
     expect(() => validatePlan(plan([t('a', ['x']), t('a', ['y'])]), limits)).toThrow(/duplicate/i);
     expect(() => validatePlan(plan([]), limits)).toThrow(/1 to 5/);
@@ -153,7 +154,7 @@ async function call(run: OrchestrateRun, token: string, method: string, path: st
   const r = await fetch(`http://127.0.0.1:${run.port}${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   return { status: r.status, body: await r.json() as any };
 }
-const planBody = { tests: 'npm test', tasks: [{ id: 'api', title: 'API', files: ['electron/api.ts'], model: 'sonnet', minutes: 20, advisor: true, prompt: 'Build the endpoint.' }, { id: 'ui', title: 'UI', files: ['src/'], model: 'fable', minutes: 30, advisor: false, prompt: 'Build the screen.' }] };
+const planBody = { tests: 'npm test', tasks: [{ id: 'api', title: 'API', files: ['electron/api.ts'], model: 'sonnet', minutes: 20, advisor: true, prompt: 'Build the endpoint.' }, { id: 'ui', title: 'UI', files: ['src/'], model: 'opus', minutes: 30, advisor: false, prompt: 'Build the screen.' }] };
 
 describe('control server', () => {
   it('rejects missing, wrong-class and foreign tokens', async () => {
@@ -393,7 +394,7 @@ describe('alphacode command', () => {
     const run = (args: string[], env: Record<string, string> = ctl, stdin: NodeJS.ReadableStream | null = null) => cli(args, env, stdin);
     expect(JSON.parse((await run(['panes'])).out)).toHaveLength(4);
     await write(join(dir, 'api.md'), 'Build the endpoint.'); await write(join(dir, 'ui.md'), 'Build the screen.');
-    await write(join(dir, 'plan.json'), JSON.stringify({ tests: 'npm test', tasks: [{ id: 'api', title: 'API', files: ['electron/api.ts'], model: 'sonnet', minutes: 20, advisor: true, prompt: 'api.md' }, { id: 'ui', title: 'UI', files: ['src/'], model: 'fable', minutes: 30, advisor: false, prompt: 'ui.md' }] }));
+    await write(join(dir, 'plan.json'), JSON.stringify({ tests: 'npm test', tasks: [{ id: 'api', title: 'API', files: ['electron/api.ts'], model: 'sonnet', minutes: 20, advisor: true, prompt: 'api.md' }, { id: 'ui', title: 'UI', files: ['src/'], model: 'opus', minutes: 30, advisor: false, prompt: 'ui.md' }] }));
     const planned = await run(['plan', join(dir, 'plan.json')]); expect(planned.code).toBe(0); expect(JSON.parse(planned.out).tasks[0].paneId).toBe('p2');
     expect((await run(['task', 'start', 'api'])).code).toBe(1); // not approved
     expect((await run(['plan', join(dir, 'plan.json'), '--approved'])).code).toBe(0);
