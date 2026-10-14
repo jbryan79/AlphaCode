@@ -35,6 +35,7 @@ export function insideRoot(root: string, dir: string): boolean {
   const r = n(root), d = n(dir);
   return !!r && (d === r || d.startsWith(r + '/'));
 }
+const list = (x: any, id: string, what: string): string[] => { if (x === undefined) return []; if (!Array.isArray(x) || x.length > 100) fail(`Task ${id}: ${what} is a list of up to 100 strings`); return x.map((e: unknown) => str(e, what, 300)); };
 export function validatePlan(value: unknown, limits: { maxWorkers: number; workerPanes: number }): Plan {
   const p = value as Plan; if (!p || typeof p !== 'object' || !Array.isArray(p.tasks)) fail('A plan is an object with a tasks array');
   const max = Math.max(0, Math.min(limits.maxWorkers, limits.workerPanes)); if (p.tasks.length < 1 || p.tasks.length > max) fail(`A plan has 1 to ${max} tasks`);
@@ -46,8 +47,7 @@ export function validatePlan(value: unknown, limits: { maxWorkers: number; worke
     if (!PLAN_MODELS.includes(v.model)) fail(`Task ${id}: model must be one of ${PLAN_MODELS.join(', ')}`);
     if (!Number.isInteger(v.minutes) || v.minutes < 1 || v.minutes > 240) fail(`Task ${id}: minutes must be 1 to 240`);
     const prompt = str(v.prompt, 'task prompt', 65536); if (!prompt.trim()) fail(`Task ${id}: prompt is empty`);
-    const list = (x: any, what: string): string[] => { if (x === undefined) return []; if (!Array.isArray(x) || x.length > 100) fail(`Task ${id}: ${what} is a list of up to 100 strings`); return x.map((e: unknown) => str(e, what, 300)); };
-    return { id, allow: list(v.allow, 'allow'), dirs: list(v.dirs, 'dirs'), title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, prompt };
+    return { id, allow: list(v.allow, id, 'allow'), dirs: list(v.dirs, id, 'dirs'), title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, prompt };
   });
   const ids = new Set(tasks.map(t => t.id)); if (ids.size !== tasks.length) fail('Duplicate task ids');
   for (let i = 0; i < tasks.length; i++) for (let j = i + 1; j < tasks.length; j++) for (const a of tasks[i].files) for (const b of tasks[j].files) if (conflicts(a, b)) fail(`File ${b} is claimed by both ${tasks[i].id} and ${tasks[j].id}`);
@@ -77,7 +77,7 @@ export const promptHeader = (t: Pick<Task, 'id' | 'minutes' | 'files'>): string 
 export const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][A-Za-z0-9]/g, '');
 export const lastLines = (text: string, n: number): string[] => text ? text.split(/\r?\n/).filter((l, i, a) => i < a.length - 1 || l !== '').slice(-n) : [];
 export const emptyOrchestrate = (): OrchestrateConfig => ({ on: false, orchestratorPaneId: '', maxWorkers: 5, approved: false, tasks: [] });
-const KEYS = ['on', 'orchestratorPaneId', 'maxWorkers', 'approved', 'tasks'], TASK_KEYS = ['id', 'title', 'files', 'model', 'minutes', 'advisor', 'state', 'paneId', 'branch', 'worktree', 'startedAt', 'finishedAt', 'retries', 'sessionId', 'message', 'hidden'];
+const KEYS = ['on', 'orchestratorPaneId', 'maxWorkers', 'approved', 'tasks'], TASK_KEYS = ['id', 'title', 'files', 'model', 'minutes', 'advisor', 'allow', 'dirs', 'state', 'paneId', 'branch', 'worktree', 'startedAt', 'finishedAt', 'retries', 'sessionId', 'message', 'hidden'];
 /** Saved orchestrate block: never on after a load, live tasks become interrupted, no prompt text or tokens tolerated. */
 export function validateOrchestrate(value: unknown, paneIds: string[]): OrchestrateConfig {
   const o = value as Record<string, any>; if (!o || typeof o !== 'object') fail('Invalid orchestrate configuration');
@@ -92,7 +92,7 @@ export function validateOrchestrate(value: unknown, paneIds: string[]): Orchestr
     const paneId = v.paneId ? validateId(v.paneId) : '';
     const id = str(v.id, 'task id', 32); if (!ID_RE.test(id)) fail(`Task id ${JSON.stringify(id)} must match ^[a-z0-9-]{1,32}$`);
     const state: TaskState = v.state === 'working' || v.state === 'waiting' ? 'interrupted' : v.state;
-    return { id, title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, state, paneId, branch: str(v.branch || '', 'branch', 200), worktree: str(v.worktree || '', 'worktree', 32768), startedAt: str(v.startedAt || '', 'startedAt', 40), finishedAt: str(v.finishedAt || '', 'finishedAt', 40), retries: v.retries, sessionId: str(v.sessionId || '', 'sessionId', 64), message: str(v.message || '', 'message', 2000), hidden: v.hidden === true };
+    return { id, title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, allow: list(v.allow, id, 'allow'), dirs: list(v.dirs, id, 'dirs'), state, paneId, branch: str(v.branch || '', 'branch', 200), worktree: str(v.worktree || '', 'worktree', 32768), startedAt: str(v.startedAt || '', 'startedAt', 40), finishedAt: str(v.finishedAt || '', 'finishedAt', 40), retries: v.retries, sessionId: str(v.sessionId || '', 'sessionId', 64), message: str(v.message || '', 'message', 2000), hidden: v.hidden === true };
   }).filter((t: Task) => !t.paneId || paneIds.includes(t.paneId));
   if (new Set(tasks.map(t => t.id)).size !== tasks.length) fail('Duplicate task ids');
   return { on: false, orchestratorPaneId, maxWorkers: o.maxWorkers, approved: o.approved === true, tasks };

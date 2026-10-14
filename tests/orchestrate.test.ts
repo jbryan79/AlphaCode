@@ -92,6 +92,11 @@ describe('persistence', () => {
     expect(() => validateOrchestrate({ ...emptyOrchestrate(), tasks: [task({ id: '../x', paneId: 'p2' })] }, ['p2'])).toThrow(/must match/);
     expect(() => validateOrchestrate({ ...emptyOrchestrate(), tasks: [task({ id: 'a', paneId: 'p2' }), task({ id: 'a', paneId: 'p2' })] }, ['p2'])).toThrow(/Duplicate task ids/);
   });
+  it('keeps each task allow-list and extra dirs so a resumed task gets the same permissions', () => {
+    const v = validateOrchestrate({ ...emptyOrchestrate(), tasks: [task({ id: 'a', paneId: 'p2', allow: ['Bash(npm test)'], dirs: ['D:/shared'] })] }, ['p2']);
+    expect(v.tasks[0].allow).toEqual(['Bash(npm test)']); expect(v.tasks[0].dirs).toEqual(['D:/shared']);
+    expect(validateOrchestrate({ ...emptyOrchestrate(), tasks: [task({ id: 'a', paneId: 'p2' })] }, ['p2']).tasks[0].allow).toEqual([]);
+  });
   it('pads presets with the requested pane type', () => {
     const w = applyPreset({ ...ws, panes: [], layout: [] }, 6, 'claude');
     expect(w.panes).toHaveLength(6); expect(w.panes.every(p => p.type === 'claude')).toBe(true);
