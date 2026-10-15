@@ -22,3 +22,15 @@ button.pane-directory:hover{background:#1b2127;color:#b6cde2}
 .status-dot.task-working{background:#9cbf9b}.status-dot.task-waiting,.status-dot.task-attention{background:#d8ae68}.status-dot.task-done{background:#6e90b1}.status-dot.task-failed{background:#dd867b}
 
 .orch-tabs{display:flex;gap:8px;padding:0 0 8px}.tab-alert{margin-left:8px;color:#e0b050}.grid-group[hidden]{display:none}
+
+.pane-role{font-family:"Cascadia Mono",Consolas,monospace;font-size:10px;font-weight:700;letter-spacing:.08em;padding:2px 6px;color:#101214;background:#a3adb8;white-space:nowrap;flex-shrink:0}
+.pane-role[data-model=fable]{background:#8cb7df}.pane-role[data-model=opus]{background:#b59fcc}.pane-role[data-model=sonnet]{background:#88bdc7}.pane-role[data-model=haiku]{background:#8696a7}.pane-role[data-model=idle]{background:#5c6873;color:#dce2e8}
+.pane-header.run{border-left:3px solid #8cb7df;padding-left:5px}.pane-header.run strong{font-size:12px;font-weight:700}.pane-name{font-size:10px;color:#7d8894;white-space:nowrap}
+.pane-header.run-working{border-left-color:#9cbf9b}
+.pane[data-color] .pane-header.run-waiting,.pane[data-color] .pane-header.run-attention{border-left-color:#d8ae68;background:#3f3523;border-bottom-color:#6a5a2e;animation:pane-pulse 1.6s ease-in-out infinite}.pane-header.run-waiting strong,.pane-header.run-attention strong{color:#ffe9b8}
+.pane[data-color] .pane-header.run-failed{border-left-color:#e18b83;background:#4a2b28}
+.pane[data-color] .pane-header.run-done{border-left-color:#3d5a42;opacity:.72}
+.pane-header.run .pane-badge{font-size:10px;background:transparent;letter-spacing:.06em}.pane-header.run-waiting .pane-badge,.pane-header.run-attention .pane-badge{font-size:11px;font-weight:700;color:#ffd27a}.pane-header.run-waiting .pane-badge::before,.pane-header.run-attention .pane-badge::before{content:"▲ "}.pane-badge small{font-size:9px;font-weight:400;color:inherit;opacity:.8}
+@keyframes pane-pulse{0%,100%{background:#3f3523}50%{background:#5a4a2a}}
+@media (prefers-reduced-motion:reduce){.pane-header{animation:none}}
+.attention-count{color:#ffd27a;font-weight:700}

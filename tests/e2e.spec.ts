@@ -143,7 +143,9 @@ test('orchestrate mode runs a two-task plan through stub workers', async () => {
   await page.locator('.pane[data-pane-title="Claude A"]').click();
   await page.getByRole('button', { name: 'Turn orchestrate on', exact: true }).click();
   await expect(page.locator('.pane')).toHaveCount(6);
-  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-badge')).toHaveText('Orchestrator');
+  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-role')).toHaveText('ORCH·FABLE');
+  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-header strong')).toHaveText('Orchestrator');
+  await expect(page.locator('.pane[data-pane-title="Claude B"] .pane-role')).toHaveText('WORKER');
   await expect(page.locator('.tasks-section')).toContainText('Waiting for a plan');
   // Drive the control channel the way the orchestrator would, using the pane's own environment.
   const env = await page.evaluate(async () => (window as any).__orchestrateEnv);
@@ -156,6 +158,8 @@ test('orchestrate mode runs a two-task plan through stub workers', async () => {
   await page.getByRole('button', { name: 'Approve plan', exact: true }).click();
   cli('task', 'start', 'a'); cli('task', 'start', 'b');
   await expect(page.locator('.pane-badge', { hasText: 'Task done' })).toHaveCount(2);
+  await expect(page.locator('.pane-header.run-done strong', { hasText: 'Alpha' })).toHaveCount(1); // the task title is the pane's headline
+  await expect(page.locator('.pane-role', { hasText: 'WORKER·SONNET' })).toHaveCount(2);
   expect(execFileSync('git', ['worktree', 'list'], { cwd: repo, encoding: 'utf8' })).toContain('task-a');
   expect(await readFile(join(repo, '.claude', 'worktrees', 'task-a', 'task-a.txt'), 'utf8')).toMatch(/^Task a in worktree task-a[\s\S]*A task$/); // prompt arrived through the file
   await expect(page.locator('.app-statusbar')).toContainText('2 done');
