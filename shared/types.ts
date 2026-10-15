@@ -6,7 +6,8 @@ export interface PaneConfig { id: string; type: PaneType; title: string; cwd: st
 export interface GridItem { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number; }
 export interface Workspace { id: string; name: string; root: string; panes: PaneConfig[]; layout: GridItem[]; locked: boolean; orchestrate?: OrchestrateConfig; }
 export interface AppState { version: 1; activeWorkspaceId: string; workspaces: Workspace[]; profiles: LocalProfile[]; }
-export interface SessionEvent { paneId: string; kind: 'data' | 'status'; data?: string; status?: SessionStatus; message?: string; pid?: number; elevated?: boolean; }
+/** `tokens`: running total for a Claude pane's session (input, cache writes, cache reads and output), read from its transcript. */
+export interface SessionEvent { paneId: string; kind: 'data' | 'status' | 'tokens'; data?: string; status?: SessionStatus; message?: string; pid?: number; elevated?: boolean; tokens?: number; }
 export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; }
 export interface AppInfo { version: string; platform: string; statePath: string; appElevated: boolean; root: string; }
 export interface VaultInfo { path: string; projects: number; notes: number; obsidian: boolean; scannedAt: string; message: string; }

@@ -110,7 +110,7 @@ function lastWindow():{x?:number;y?:number;width?:number;height?:number;maximize
 }
 async function createWindow():Promise<void>{
   const last=lastWindow(); // ponytail: no display-bounds check; Electron clamps partially off-screen windows, a removed monitor may need a drag back.
-  window=new BrowserWindow({width:1560,height:1050,minWidth:960,minHeight:640,title:'AlphaCode by JABSystems',icon:join(app.getAppPath(),'public','icon.ico'),backgroundColor:'#131619',show:false,webPreferences:{preload:join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
+  window=new BrowserWindow({width:1560,height:1050,minWidth:960,minHeight:640,title:'AlphaCode by JABSystems',autoHideMenuBar:true,icon:join(app.getAppPath(),'public','icon.ico'),backgroundColor:'#131619',show:false,webPreferences:{preload:join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
   // Electron applies a rectangle a pixel or two off at fractional display scaling (electron/electron#10862), and a hidden window is
   // worse than a shown one. Restore while hidden, correct once shown, and on close let an unchanged window keep the numbers it was
   // restored from, so the error never compounds across launches.

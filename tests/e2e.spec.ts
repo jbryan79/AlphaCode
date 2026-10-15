@@ -37,6 +37,10 @@ test('production dashboard, real terminals, layout editing and persistence',asyn
   await page.getByRole('button',{name:'Configure PowerShell',exact:true}).click();
   await page.getByLabel('Pane name',{exact:true}).fill('Operations');await page.getByRole('button',{name:'Apply changes'}).click();
   await expect(page.locator(`.pane[data-pane-id="${psId}"] .pane-status`)).toHaveText('running');
+  // The sidebar is the one thing that resizes: drag its splitter and the width sticks for this machine.
+  const splitter=page.getByRole('separator',{name:'Resize sidebar'});const sb=await splitter.boundingBox();if(!sb)throw new Error('Sidebar splitter missing');
+  await page.mouse.move(sb.x+3,sb.y+200);await page.mouse.down();await page.mouse.move(sb.x+83,sb.y+200,{steps:6});await page.mouse.up();
+  await expect.poll(async()=>(await page.locator('.sidebar').boundingBox())?.width).toBeGreaterThan(360);
   await page.getByRole('button',{name:'Maximize Operations',exact:true}).click();await expect(page.locator('.pane.maximized')).toHaveCount(1);
   await page.screenshot({path:join(root,'work','focused-desktop.png')});
   await page.getByRole('button',{name:'Restore Operations',exact:true}).click();
@@ -49,13 +53,11 @@ test('production dashboard, real terminals, layout editing and persistence',asyn
   await page.getByRole('button',{name:'Close Operations copy',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(8);
   await page.getByRole('button',{name:'Lock layout',exact:true}).click();await expect(page.getByRole('button',{name:'Move Operations up',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'Unlock layout',exact:true}).click();
-  // Actually resize a pane with the grid handle, then verify persisted geometry.
-  const pane=page.locator(`.pane[data-pane-id="${psId}"]`),handle=pane.locator('.react-resizable-handle');const box=await handle.boundingBox();
-  if(!box)throw new Error('Resize handle missing');
-  await page.mouse.move(box.x+6,box.y+6);await page.mouse.down();await page.mouse.move(box.x+6,box.y+70,{steps:6});await page.mouse.up();
-  // Autosave persists the resize; poll the file instead of clicking a save button.
+  // Panes take their size from the window: there is no resize handle, even with the layout unlocked.
+  await expect(page.locator(`.pane[data-pane-id="${psId}"] .react-resizable-handle`)).toHaveCount(0);
+  // Autosave persists the rename; poll the file instead of clicking a save button.
   const saved=async()=>JSON.parse(await readFile(join(dataDir,'state.json'),'utf8')) as AppState;
-  await expect.poll(async()=>(await saved()).workspaces[0].layout.find(l=>l.i===psId)?.h).toBeGreaterThan(4);
+  await expect.poll(async()=>(await saved()).workspaces[0].panes.find(p=>p.id===psId)?.title).toBe('Operations');
   expect((await saved()).workspaces[0].panes.find(p=>p.id===psId)?.title).toBe('Operations');
   // Confirm ordinary token inside the actual PowerShell process.
   await pane.locator('.xterm-helper-textarea').focus();await page.keyboard.type("Write-Output ('TOKEN_' + ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)))");await page.keyboard.press('Enter');

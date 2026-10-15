@@ -34,3 +34,6 @@ button.pane-directory:hover{background:#1b2127;color:#b6cde2}
 @keyframes pane-pulse{0%,100%{background:#3f3523}50%{background:#5a4a2a}}
 @media (prefers-reduced-motion:reduce){.pane-header{animation:none}}
 .attention-count{color:#ffd27a;font-weight:700}
+.app-shell{grid-template-columns:var(--sidebar-w,300px) minmax(0,1fr)}
+.sidebar-resizer{grid-column:1;grid-row:2;justify-self:end;width:6px;cursor:col-resize;z-index:5;background:transparent}.sidebar-resizer:hover,.sidebar-resizer:active{background:#3d5570}
+.pane-tokens{font-family:"Cascadia Mono",Consolas,monospace;font-size:10px;color:#8696a7;white-space:nowrap}
