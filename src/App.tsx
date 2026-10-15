@@ -111,7 +111,7 @@ export default function App() {
     const roles:OrchestrateRoles={workspaceId:w.id,root:orchestrator.cwd,orchestratorPaneId:orchestrator.id,workerPaneIds,advisorPaneIds:w.panes.filter(p=>p.type==='local-model').map(p=>p.id),maxWorkers:orchestrate.maxWorkers,resume};
     try{await Promise.all(removed.map(async p=>{await window.bridge.stopSession(p.id);await window.bridge.cancelChat(p.id);}));
       const testEnv=await window.bridge.orchestrateStart(roles);started=true;setRunPanes([orchestrator.id,...workerPaneIds,...roles.advisorPaneIds]);setTab('run');if(testEnv)(window as any).__orchestrateEnv={ALPHACODE_CONTROL_URL:testEnv.url,ALPHACODE_CONTROL_TOKEN:testEnv.token};
-      setState(s=>s?{...s,workspaces:s.workspaces.map(x=>x.id===w.id?{...x,panes:w.panes,layout:w.layout,orchestrate:{...(x.orchestrate||emptyOrchestrate()),on:true,orchestratorPaneId:orchestrator.id,approved:false,tasks:resume}}:x)}:s);setMaximized('');setOrch({approved:false,tasks:resume,finished:''});
+      setState(s=>s?{...s,workspaces:s.workspaces.map(x=>x.id===w.id?{...x,panes:w.panes.map(p=>workerPaneIds.includes(p.id)?{...p,cwd:orchestrator.cwd}:p),layout:w.layout,orchestrate:{...(x.orchestrate||emptyOrchestrate()),on:true,orchestratorPaneId:orchestrator.id,approved:false,tasks:resume}}:x)}:s);setMaximized('');setOrch({approved:false,tasks:resume,finished:''});
       await window.bridge.stopSession(orchestrator.id);setRelaunch(r=>({...r,[orchestrator.id]:(r[orchestrator.id]||0)+1}));setFocused(orchestrator.id);
     }catch(e){if(started)await window.bridge.orchestrateStop().catch(()=>{});report(String(e));update(x=>x.orchestrate?{...x,orchestrate:{...x.orchestrate,on:false}}:x);}
   };

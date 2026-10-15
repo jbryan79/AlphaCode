@@ -208,7 +208,7 @@ describe('control server', () => {
     await new Promise(r => setTimeout(r, 20));
     const sid = f.run.tasks()[0].sessionId; expect(sid).not.toBe('');
     expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409); expect(f.run.tasks()[0].sessionId).toBe(sid);
-    const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2')); expect(o.env!.ALPHACODE_RUN_DIR_SHIM).toBe(f.runDir);
+    const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.cwd).toBe(f.deps.roles.root); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2')); expect(o.env!.ALPHACODE_RUN_DIR_SHIM).toBe(f.runDir);
     const file = join(f.runDir, 'task-api.md'); expect(o.args!.at(-1)).toBe(`Read the file ${file} and carry out the task it describes.`); // the prompt travels as a file, not argv
     expect(await readFile(file, 'utf8')).toBe(promptHeader(f.run.tasks()[0]) + 'Build the endpoint.');
     release(); expect((await first).status).toBe(200);
