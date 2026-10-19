@@ -149,7 +149,8 @@ test('orchestrate mode runs a two-task plan through stub workers', async () => {
   await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-header strong')).toHaveText('Orchestrator');
   await expect(page.locator('.pane[data-pane-title="Claude B"] .pane-role')).toHaveText('WORKER');
   await expect(page.locator('.tasks-section')).toContainText('Waiting for a plan');
-  // Drive the control channel the way the orchestrator would, using the pane's own environment.
+  await expect(page.getByRole('button', { name: 'Turn orchestrate off', exact: true })).toContainText('ON');
+  await expect(page.locator('.app-shell')).toHaveClass(/orchestrating/);  // Drive the control channel the way the orchestrator would, using the pane's own environment.
   const env = await page.evaluate(async () => (window as any).__orchestrateEnv);
   dir = await mkdtemp(join(tmpdir(), 'alphacode-plan-'));
   await writeFile(join(dir, 'a.md'), 'A task'); await writeFile(join(dir, 'b.md'), 'B task');

@@ -37,3 +37,15 @@ button.pane-directory:hover{background:#1b2127;color:#b6cde2}
 .app-shell{grid-template-columns:var(--sidebar-w,300px) minmax(0,1fr)}
 .sidebar-resizer{grid-column:1;grid-row:2;justify-self:end;width:6px;cursor:col-resize;z-index:5;background:transparent}.sidebar-resizer:hover,.sidebar-resizer:active{background:#3d5570}
 .pane-tokens{font-family:"Cascadia Mono",Consolas,monospace;font-size:10px;color:#8696a7;white-space:nowrap}
+.orch-state{font-size:9px;font-weight:700;letter-spacing:.08em;padding:1px 5px;border-radius:3px;background:#2a3038;color:#7d8a98}
+.toolbar-actions>button.orch-toggle.on{background:#8cb7df;border-color:#8cb7df;color:#0f1a26;font-weight:700}
+.toolbar-actions>button.orch-toggle.on:hover{background:#a5c8e8}
+.orch-toggle.on .orch-state{background:#0f1a26;color:#8cb7df}
+.orch-live{width:8px;height:8px;border-radius:50%;background:#0f1a26;animation:orch-live 1.4s ease-in-out infinite}
+@keyframes orch-live{0%,100%{box-shadow:0 0 0 0 rgba(15,26,38,.6)}50%{box-shadow:0 0 0 4px rgba(15,26,38,0)}}
+.app-shell.orchestrating .app-toolbar{box-shadow:inset 0 3px 0 #8cb7df;border-bottom-color:#3d5570}
+.app-shell.orchestrating .app-statusbar{background:#8cb7df;border-top-color:#8cb7df;color:#0f1a26;font-weight:600}
+.app-shell.orchestrating .app-statusbar .status-dot{background:#0f1a26}
+.app-shell.orchestrating .attention-count{color:#7a1f12}
+.orch-label{text-transform:uppercase;letter-spacing:.1em;margin-right:6px}
+@media (prefers-reduced-motion:reduce){.orch-live{animation:none}}
