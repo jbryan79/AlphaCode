@@ -5,6 +5,7 @@ release/
 test-results/
 playwright-report/
 work/
+brag-output*/
 .superpowers/
 *.log
 /target
