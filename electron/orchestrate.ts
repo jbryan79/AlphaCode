@@ -3,12 +3,12 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { OrchestrateEvent, OrchestrateRoles, PaneConfig, Plan, Task } from '../shared/types';
-import { ORCHESTRATOR_ALLOW, WORKER_ALLOW, insideRoot, lastLines as tail, promptHeader, stripAnsi, transition, validatePlan, type Signal } from '../shared/orchestrate';
+import { ORCHESTRATOR_ALLOW, PLAN_MODELS, REVIEWER_ALLOW, REVIEWER_DENY, WORKER_ALLOW, insideRoot, lastLines as tail, promptHeader, reviewId, reviewPrompt, stripAnsi, taskLabel, transition, validatePlan, type Signal } from '../shared/orchestrate';
 import { validateId } from '../shared/domain';
 import type { LaunchOverrides } from './terminals';
 export type { LaunchOverrides };
 
-export interface RunDeps { runDir: string; execPath: string; cliPath: string; playbookPath: string; roles: OrchestrateRoles; panes: () => PaneConfig[]; git: (args: string[], cwd: string) => Promise<string>; launch: (paneId: string) => Promise<void>; chat: (paneId: string, prompt: string) => Promise<string>; finish: (report: string, summary: string, run: { tasks: Task[]; plan: Plan | null }) => Promise<void>; emit: (event: OrchestrateEvent) => void; log: (message: string) => void; now?: () => number; }
+export interface RunDeps { runDir: string; execPath: string; cliPath: string; playbookPath: string; roles: OrchestrateRoles; panes: () => PaneConfig[]; git: (args: string[], cwd: string) => Promise<string>; launch: (paneId: string) => Promise<void>; chat: (paneId: string, prompt: string) => Promise<string>; finish: (report: string, summary: string, run: { tasks: Task[]; plan: Plan | null }) => Promise<void>; emit: (event: OrchestrateEvent) => void; log: (message: string) => void; now?: () => number; nudgeDelayMs?: number; }
 interface Live { task: Task; prompt: string; hookToken: string; hooksFile: string; promptFile?: string; }
 const token = () => randomBytes(32).toString('hex');
 const RING = 4096;
@@ -18,7 +18,11 @@ export class OrchestrateRun {
   protected plan: Plan | null = null; protected live = new Map<string, Live>(); protected launching = new Set<string>(); protected history: Task[] = [];
   /** Panes whose current session this run launched (cleared on exit); only those get retry feedback typed in. */
   protected launched = new Set<string>();
-  private rings = new Map<string, string>(); private server: Server | null = null; private version = 0; private waiters: (() => void)[] = []; private finished = false;
+  private rings = new Map<string, string>(); private server: Server | null = null; private version = 0; private waiters: (() => void)[] = []; private summary = '';
+  /** Task ids each pending `task wait` covers; a change nobody waits on wakes the orchestrator instead (nudge). */
+  private watchers = new Set<string[]>(); private nudges = new Map<string, Task>(); private nudgeTimer: NodeJS.Timeout | null = null;
+  /** True while the orchestrator pane runs the session this run launched (with the control channel); only that session is nudged. */
+  private orchestratorLive = false;
   constructor(protected deps: RunDeps) {
     // Interrupted tasks from the saved workspace come back without prompt text; retry supplies the next message.
     for (const t of deps.roles.resume || []) if (t.state === 'interrupted' && deps.roles.workerPaneIds.includes(t.paneId) && !this.live.has(t.paneId)) this.live.set(t.paneId, this.mintTask({ ...t }, ''));
@@ -31,26 +35,32 @@ export class OrchestrateRun {
     // Claude Code's Bash tool is Git Bash, which does not find a .cmd by bare name: give it an extensionless sh shim too.
     const posix = (p: string) => p.replace(/\\/g, '/');
     await writeFile(join(this.deps.runDir, 'alphacode'), `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${posix(this.deps.execPath)}" "${posix(this.deps.cliPath)}" "$@"\n`, 'utf8');
-    await writeFile(join(this.deps.runDir, 'orchestrator.json'), JSON.stringify({ permissions: { allow: ORCHESTRATOR_ALLOW, additionalDirectories: [this.deps.runDir] } }), 'utf8');
+    await writeFile(join(this.deps.runDir, 'orchestrator.json'), JSON.stringify({ promptSuggestionEnabled: false, permissions: { allow: ORCHESTRATOR_ALLOW, additionalDirectories: [this.deps.runDir] } }), 'utf8');
     this.server = createServer((req, res) => void this.handle(req, res).catch(e => this.reply(res, 500, { error: (e as Error).message })));
     await new Promise<void>((resolve, reject) => this.server!.once('error', reject).listen(0, '127.0.0.1', resolve));
     this.port = (this.server.address() as { port: number }).port; return this.port;
   }
   async stop(): Promise<void> {
-    const server = this.server; this.server = null; for (const w of this.waiters.splice(0)) w();
+    const server = this.server; this.server = null; for (const w of this.waiters.splice(0)) w(); if (this.nudgeTimer) clearTimeout(this.nudgeTimer); this.nudgeTimer = null;
     await new Promise<void>(resolve => { if (!server) return resolve(); server.close(() => resolve()); server.closeAllConnections(); });
     await rm(this.deps.runDir, { recursive: true, force: true }); this.deps.emit({ kind: 'off' });
   }
   /** The orchestrated project root when this pane is not part of the run but would start inside it, else ''. Only the run's own panes may work in that folder. */
   reservedRoot(paneId: string, cwd: string): string { return this.roleOf(paneId) === 'none' && insideRoot(this.deps.roles.root, cwd) ? this.deps.roles.root : ''; }
-  private pathEnv() { return { PATH: `${this.deps.runDir};${process.env.PATH || ''}` }; }
+  // Run panes never show Claude Code's suggested next prompt: a finished run should leave every input empty.
+  private pathEnv() { return { PATH: `${this.deps.runDir};${process.env.PATH || ''}`, CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: 'false' }; }
   overrides(paneId: string): LaunchOverrides | null {
     const { roles } = this.deps;
-    if (paneId === roles.orchestratorPaneId) return { env: { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_CONTROL_TOKEN: this.controlToken, ALPHACODE_RUN_DIR: this.deps.runDir }, args: ['--model', 'fable', '--fallback-model', 'opus', '--settings', join(this.deps.runDir, 'orchestrator.json'), '--append-system-prompt-file', this.deps.playbookPath, '--name', 'Orchestrator', '--disallowedTools', 'Agent'] };
+    if (paneId === roles.orchestratorPaneId) {
+      this.orchestratorLive = true;
+      return { env: { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_CONTROL_TOKEN: this.controlToken, ALPHACODE_RUN_DIR: this.deps.runDir }, args: ['--model', 'fable', '--fallback-model', 'opus', '--settings', join(this.deps.runDir, 'orchestrator.json'), '--append-system-prompt-file', this.deps.playbookPath, '--name', 'Orchestrator', '--disallowedTools', 'Agent'] };
+    }
     const l = this.live.get(paneId); if (!l || !this.launching.has(paneId)) return null;
     const env = { ...this.pathEnv(), ALPHACODE_CONTROL_URL: `http://127.0.0.1:${this.port}`, ALPHACODE_HOOK_TOKEN: l.hookToken, ALPHACODE_PANE_ID: paneId, ALPHACODE_RUN_DIR_SHIM: this.deps.runDir };
     const read = `Read the file ${l.promptFile} and carry out the task it describes.`;
     if (l.task.retries > 0 && l.task.worktree) return { env, cwd: l.task.worktree, args: ['--resume', l.task.sessionId, '--settings', l.hooksFile, read] };
+    // A reviewer opens a new session inside the reviewed task's worktree: no --worktree, nothing of the worker's context.
+    if (l.task.reviews) return { env, cwd: l.task.worktree, args: ['--model', l.task.model, '--name', l.task.title, '--settings', l.hooksFile, '--session-id', l.task.sessionId, read] };
     // Workers start in the run's root, not their pane's saved folder: `--worktree` branches from whatever repo the cwd is in.
     return { env, cwd: roles.root, args: ['--worktree', `task-${l.task.id}`, '--model', l.task.model, ...(l.task.model === 'fable' ? ['--fallback-model', 'opus'] : []), '--name', l.task.title, '--settings', l.hooksFile, '--session-id', l.task.sessionId, read] };
   }
@@ -73,6 +83,7 @@ export class OrchestrateRun {
     const url = new URL(req.url || '/', 'http://127.0.0.1'), route = `${req.method} ${url.pathname}`;
     try {
       if (route === 'POST /report') { const b = await this.body(req); const paneId = typeof b.paneId === 'string' ? b.paneId : ''; const l = this.live.get(paneId); if (!l || !this.authorized(req, l.hookToken)) return this.reply(res, 401, { error: 'Unauthorized' }); const task = this.report(paneId, b); await this.locate(l); return this.reply(res, 200, { task }); }
+      if (route === 'POST /verdict') { const b = await this.body(req); const paneId = typeof b.paneId === 'string' ? b.paneId : ''; const l = this.live.get(paneId); if (!l || !this.authorized(req, l.hookToken)) return this.reply(res, 401, { error: 'Unauthorized' }); return this.reply(res, 200, { task: await this.verdict(l, b) }); }
       if (!this.authorized(req, this.controlToken)) return this.reply(res, 401, { error: 'Unauthorized' });
       let m: RegExpExecArray | null;
       if (route === 'GET /panes') return this.reply(res, 200, this.panes());
@@ -82,6 +93,7 @@ export class OrchestrateRun {
       if ((m = /^GET \/tasks\/([a-z0-9-]+)$/.exec(route))) { await this.locateAll(); return this.reply(res, 200, this.status(this.find(m[1], true))); }
       if ((m = /^POST \/tasks\/([a-z0-9-]+)\/start$/.exec(route))) return this.reply(res, 200, await this.startTask(m[1]));
       if ((m = /^POST \/tasks\/([a-z0-9-]+)\/retry$/.exec(route))) return this.reply(res, 200, await this.retry(m[1], await this.body(req)));
+      if ((m = /^POST \/tasks\/([a-z0-9-]+)\/review$/.exec(route))) return this.reply(res, 200, this.status(await this.review(m[1], await this.body(req))));
       if ((m = /^POST \/ask\/([A-Za-z0-9_-]+)$/.exec(route))) return this.reply(res, 200, await this.ask(m[1], await this.body(req)));
       if (route === 'POST /finish') return this.reply(res, 200, await this.finish(await this.body(req)));
       this.reply(res, 404, { error: 'Not found' });
@@ -90,7 +102,21 @@ export class OrchestrateRun {
   private roleOf(id: string): 'orchestrator' | 'worker' | 'advisor' | 'none' { const r = this.deps.roles; return id === r.orchestratorPaneId ? 'orchestrator' : r.workerPaneIds.includes(id) ? 'worker' : r.advisorPaneIds.includes(id) ? 'advisor' : 'none'; }
   private panes() { return this.deps.panes().map(p => { const t = this.live.get(p.id)?.task; return { id: p.id, title: p.title, type: p.type, cwd: p.cwd, role: this.roleOf(p.id), task: t ? { id: t.id, state: t.state } : null }; }); }
   private find(id: string, withHistory = false): Task { const t = [...this.live.values()].find(x => x.task.id === id)?.task || (withHistory ? this.history.find(x => x.id === id) : undefined); if (!t) this.err(404, `No task ${id}`); return t; }
-  private status(t: Task) { return { ...t, elapsedSeconds: t.startedAt ? Math.round(((t.finishedAt ? Date.parse(t.finishedAt) : this.now()) - Date.parse(t.startedAt)) / 1000) : 0, lines: this.lastLines(t.paneId) }; }
+  private status(t: Task) { return { ...t, elapsedSeconds: t.startedAt ? Math.round(((t.finishedAt ? Date.parse(t.finishedAt) : this.now()) - Date.parse(t.startedAt)) / 1000) : 0, lines: this.lastLines(t.paneId), ...(t.reviews ? { verdictFile: t.verdict ? this.verdictFile(t.id) : '' } : {}) }; }
+  private verdictFile(id: string): string { return join(this.deps.runDir, `review-${id}.md`); }
+  /** A pane a new task may take: nothing live on it, its task done, or a review that failed. */
+  private free(l: Live | undefined): boolean { return !l || l.task.state === 'done' || (!!l.task.reviews && (l.task.state === 'failed' || l.task.state === 'interrupted')); }
+  /** First free worker pane: `prefer` first, then empty panes, finished reviews, other finished tasks, and `last` only when nothing else is free. */
+  private freePane(prefer: string[], last: string[] = []): string {
+    const workers = this.deps.roles.workerPaneIds.filter(id => !this.launching.has(id) && this.free(this.live.get(id)) && this.deps.panes().some(p => p.id === id && p.type === 'claude'));
+    const rank = (id: string) => prefer.includes(id) ? -1 : last.includes(id) ? 3 : !this.live.has(id) ? 0 : this.live.get(id)!.task.reviews ? 1 : 2;
+    return workers.sort((a, b) => rank(a) - rank(b))[0] || '';
+  }
+  /** Put a task on a pane; whatever finished task held the pane moves to history. */
+  private place(task: Task, paneId: string, prompt: string): Live {
+    const old = this.live.get(paneId); this.history = this.history.filter(x => x !== task); if (old) this.history.push(old.task);
+    task.paneId = paneId; const l = this.mintTask(task, prompt); this.live.set(paneId, l); return l;
+  }
   private async setPlan(body: unknown): Promise<Omit<Plan, 'tasks'> & { tasks: Task[] }> {
     const { roles } = this.deps; const workers = roles.workerPaneIds.filter(id => this.deps.panes().some(p => p.id === id && p.type === 'claude'));
     const plan = validatePlan(body, { maxWorkers: roles.maxWorkers, workerPanes: workers.length });
@@ -99,10 +125,10 @@ export class OrchestrateRun {
     // Planned tasks are replaced; a Task done pane is free again and its task moves to history; any other state keeps its pane.
     const kept = new Map([...this.live.entries()].filter(([, l]) => l.task.state !== 'planned')), used = new Set([...kept.values()].map(l => l.task.id).concat(this.history.map(t => t.id)));
     const reused = plan.tasks.find(pt => used.has(pt.id)); if (reused) this.err(409, `Task id ${reused.id} is already used in this run; pick a new id`);
-    const added = plan.tasks.some(pt => ![...this.live.values()].some(l => l.task.id === pt.id)), free = workers.filter(id => !kept.has(id) || kept.get(id)!.task.state === 'done'), displaced: Task[] = [];
+    const added = plan.tasks.some(pt => ![...this.live.values()].some(l => l.task.id === pt.id)), free = workers.filter(id => this.free(kept.get(id))), displaced: Task[] = [];
     for (const pt of plan.tasks) { const paneId = free.shift(); if (!paneId) this.err(409, 'No free worker pane for the plan'); const old = kept.get(paneId); if (old) displaced.push(old.task); const { prompt, ...rest } = pt; const task: Task = { ...rest, state: 'planned', paneId, branch: '', worktree: '', startedAt: '', finishedAt: '', retries: 0, sessionId: '', message: '', hidden: false }; kept.set(paneId, this.mintTask(task, prompt)); }
     // A plan with new tasks is a new request: it needs its own "go" and may finish again.
-    this.live = kept; this.history.push(...displaced); this.plan = { ...plan, approved: plan.approved || (!added && this.plan?.approved === true) }; if (added) this.finished = false; this.bump();
+    this.live = kept; this.history.push(...displaced); this.plan = { ...plan, approved: plan.approved || (!added && this.plan?.approved === true) }; if (added) this.summary = ''; this.bump();
     return { ...this.plan, tasks: this.tasks() };
   }
   private async launchPane(l: Live, signal: Signal): Promise<Task> {
@@ -111,7 +137,7 @@ export class OrchestrateRun {
     this.launching.add(id);
     // The prompt travels as a file: argv through claude.cmd and cmd.exe truncates at a newline and caps at 32,767 characters.
     l.promptFile = join(this.deps.runDir, signal === 'start' ? `task-${l.task.id}.md` : `task-${l.task.id}-retry-${l.task.retries}.md`);
-    try { await writeFile(l.hooksFile, this.hooksJson(l.task), 'utf8'); await writeFile(l.promptFile, signal === 'start' ? promptHeader(l.task) + l.prompt : l.prompt, 'utf8'); await this.deps.launch(id); this.launched.add(id); this.signal(id, signal); }
+    try { await writeFile(l.hooksFile, this.hooksJson(l.task), 'utf8'); await writeFile(l.promptFile, signal === 'start' && !l.task.reviews ? promptHeader(l.task) + l.prompt : l.prompt, 'utf8'); await this.deps.launch(id); this.launched.add(id); this.signal(id, signal); }
     // A failed first launch goes back to Planned so `task start` can try again; a failed resume stays Failed for retry.
     catch (error) { this.launching.delete(id); l.task.state = signal === 'start' ? 'planned' : 'failed'; l.task.message = (error as Error).message; this.bump(); throw error; }
     this.launching.delete(id); await this.locate(l); return l.task;
@@ -133,12 +159,16 @@ export class OrchestrateRun {
     return this.launchPane(l, 'start');
   }
   private async retry(id: string, body: any): Promise<Task> {
-    const t = this.find(id); const l = this.live.get(t.paneId)!; const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : ''; if (!feedback || feedback.length > 65536) this.err(400, 'feedback is required (1 to 65536 characters)');
+    const t = this.find(id, true); let l = this.live.get(t.paneId); if (l?.task !== t) l = undefined;
+    const feedback = typeof body.feedback === 'string' ? body.feedback.trim() : ''; if (!feedback || feedback.length > 65536) this.err(400, 'feedback is required (1 to 65536 characters)');
     if (!transition(t.state, 'retry')) this.err(409, `Task ${id} is ${t.state}`); if (t.retries >= 2) this.err(409, `Task ${id} already retried twice`);
-    await this.locate(l);
+    if (l) await this.locate(l);
     // Only type into a session this run launched; after an app restart the pane may hold an unrelated idle Claude session.
-    const alive = this.launched.has(t.paneId) && this.alive(t.paneId);
-    if (!alive) { if (!t.sessionId || !t.worktree) this.err(409, `Task ${id} has no session to resume`); if (this.launching.has(t.paneId)) this.err(409, `Pane ${t.paneId} is already launching`); }
+    // A task whose pane a later plan or review took is never typed into: it resumes its own session on a free pane.
+    const alive = !!l && this.launched.has(t.paneId) && this.alive(t.paneId);
+    if (!alive) { if (!t.sessionId || !t.worktree) this.err(409, `Task ${id} has no session to resume`); if (l && this.launching.has(t.paneId)) this.err(409, `Pane ${t.paneId} is already launching`); }
+    if (!l) { const paneId = this.freePane([t.paneId]); if (!paneId) this.err(409, `No free worker pane to resume task ${id}`); l = this.place(t, paneId, ''); }
+    if (t.reviews) t.verdict = '';
     // Enter goes in a separate write: text and CR in one chunk can read as a paste, leaving the CR as a newline that never submits.
     if (alive) { const paneId = t.paneId; this.writer(paneId, feedback.replace(/[\r\n]+/g, ' ').replace(/[\x00-\x1f\x7f]/g, '')); setTimeout(() => { try { this.writer(paneId, '\r'); } catch (error) { this.deps.log(`retry enter: ${(error as Error).message}`); } }, 100); }
     t.retries++; t.message = ''; t.finishedAt = '';
@@ -147,16 +177,45 @@ export class OrchestrateRun {
   }
   private report(paneId: string, b: any): Task | null {
     const kind = b.kind, message = typeof b.message === 'string' ? b.message.slice(0, 2000) : '';
+    if (kind === 'done' && this.live.get(paneId)?.task.reviews) this.err(400, 'A review finishes with alphacode verdict pass|fail');
     if (kind === 'done' || kind === 'failed' || kind === 'stop') return this.signal(paneId, kind, message);
+    // A worker that reports `waiting` itself (no hook notification) is blocked: surface its reason as Needs attention instead of dropping it.
+    if (kind === 'waiting' && b.notificationType === undefined && message) return this.signal(paneId, 'stop', `Blocked: ${message}`);
     if (kind === 'waiting') return b.notificationType === 'permission_prompt' ? this.signal(paneId, 'waiting', 'Waiting for permission') : b.notificationType === 'idle_prompt' ? this.signal(paneId, 'stop', 'Idle, waiting for input') : null;
     this.err(400, 'kind must be done, failed, stop or waiting');
+  }
+  /** Start a fresh, read-only Claude session that judges a done task's committed diff against the orchestrator's criteria. */
+  private async review(id: string, body: any): Promise<Task> {
+    const t = this.find(id, true); if (t.reviews) this.err(400, `Task ${id} is a review; review the task it reviews instead`);
+    const criteria = typeof body.criteria === 'string' ? body.criteria.trim() : ''; if (!criteria || criteria.length > 65536) this.err(400, 'criteria is required (1 to 65536 characters)');
+    const model = body.model === undefined ? 'sonnet' : body.model; if (!PLAN_MODELS.includes(model)) this.err(400, `model must be one of ${PLAN_MODELS.join(', ')}`);
+    if (t.state !== 'done') this.err(409, `Task ${id} is ${t.state}; review it once it is done`);
+    const held = this.live.get(t.paneId); if (held?.task === t) await this.locate(held); if (!t.worktree || !t.branch) this.err(409, `Task ${id} has no worktree to review yet`);
+    const earlier = this.tasks().filter(x => x.reviews === id), open = earlier.find(x => x.state !== 'done' && x.state !== 'failed');
+    if (open) this.err(409, `Task ${id} already has review ${open.id} (${open.state})`);
+    const rid = reviewId(id, earlier.length + 1); if (rid.length > 32 || this.tasks().some(x => x.id === rid)) this.err(409, `Task ${id} has been reviewed too many times`);
+    // The reviewed task's own pane is the last choice: taking it moves the task to history, and a retry resumes it on a free pane.
+    const paneId = this.freePane([], [t.paneId]); if (!paneId) this.err(409, 'No free worker pane for a review; wait for a task to finish');
+    let base = ''; try { base = (await this.deps.git(['merge-base', 'HEAD', t.branch], this.deps.roles.root)).trim(); } catch (error) { this.err(409, `Cannot find where ${t.branch} branched from: ${(error as Error).message}`); }
+    if (!/^[0-9a-f]{7,64}$/.test(base)) this.err(409, `Cannot find where ${t.branch} branched from`);
+    const task: Task = { id: rid, title: `Review: ${t.title}`.slice(0, 100), files: [], model, minutes: 15, advisor: false, allow: [...(t.allow || [])], dirs: [...(t.dirs || [])], state: 'planned', paneId, branch: t.branch, worktree: t.worktree, startedAt: new Date(this.now()).toISOString(), finishedAt: '', retries: 0, sessionId: this.uuid(), message: '', hidden: false, reviews: id, verdict: '' };
+    return this.launchPane(this.place(task, paneId, reviewPrompt(t, rid, base, this.plan?.tests || '', criteria)), 'start');
+  }
+  private async verdict(l: Live, b: any): Promise<Task> {
+    if (!l.task.reviews) this.err(400, 'Only a review gives a verdict; report done instead');
+    if (b.verdict !== 'pass' && b.verdict !== 'fail') this.err(400, 'verdict must be pass or fail');
+    const findings: string = typeof b.findings === 'string' ? b.findings.trim() : ''; if (!findings || findings.length > 65536) this.err(400, 'findings are required (1 to 65536 characters)');
+    if (!transition(l.task.state, 'done')) this.err(409, `Task ${l.task.id} is ${l.task.state}`);
+    await writeFile(this.verdictFile(l.task.id), `# ${b.verdict === 'pass' ? 'PASS' : 'FAIL'}: review of ${l.task.reviews}\n\n${findings}\n`, 'utf8');
+    l.task.verdict = b.verdict; return this.signal(l.task.paneId, 'done', findings.split(/\r?\n/).map(s => s.trim()).find(Boolean)!.slice(0, 300))!;
   }
   private wait(ids: string, timeout: number): Promise<{ changed: boolean; tasks: Task[] }> {
     const want = ids ? ids.split(',').map(s => s.trim()).filter(Boolean) : this.tasks().map(t => t.id); for (const id of want) this.find(id, true);
     const pick = () => this.tasks().filter(t => want.includes(t.id)); const snapshot = JSON.stringify(pick().map(t => [t.id, t.state, t.retries])); const ms = Math.max(0, Math.min(240, Number.isFinite(timeout) ? timeout : 240)) * 1000;
     return new Promise(resolve => {
       const changed = () => JSON.stringify(pick().map(t => [t.id, t.state, t.retries])) !== snapshot;
-      const done = () => { clearTimeout(timer); this.waiters = this.waiters.filter(w => w !== check); resolve({ changed: changed(), tasks: pick() }); };
+      const done = () => { clearTimeout(timer); this.watchers.delete(want); this.waiters = this.waiters.filter(w => w !== check); resolve({ changed: changed(), tasks: pick() }); };
+      this.watchers.add(want);
       const check = () => { if (changed() || !this.server) done(); else this.waiters.push(check); };
       const timer = setTimeout(done, ms); this.waiters.push(check);
     });
@@ -167,18 +226,30 @@ export class OrchestrateRun {
     return { answer: await this.deps.chat(paneId, prompt) };
   }
   private async finish(body: any): Promise<{ summary: string }> {
-    if (this.finished) this.err(409, 'This run already finished'); const report: string = typeof body.report === 'string' ? body.report.trim() : ''; if (!report || report.length > 1048576) this.err(400, 'report is required');
-    const summary = report.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#') && !/^report$/i.test(l))[0] || 'Finished'; this.finished = true;
-    await this.deps.finish(report, summary.slice(0, 200), { tasks: this.tasks(), plan: this.plan }); this.deps.emit({ kind: 'finished', summary: summary.slice(0, 200) }); return { summary };
+    if (this.summary) this.err(409, 'This run already finished'); const report: string = typeof body.report === 'string' ? body.report.trim() : ''; if (!report || report.length > 1048576) this.err(400, 'report is required');
+    const summary = report.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#') && !/^report$/i.test(l))[0] || 'Finished'; this.summary = summary.slice(0, 200);
+    await this.deps.finish(report, this.summary, { tasks: this.tasks(), plan: this.plan }); this.deps.emit({ kind: 'finished', summary: this.summary }); return { summary };
   }
-  protected signal(paneId: string, signal: Signal, message = ''): Task | null { const l = this.live.get(paneId); if (!l) return null; const next = transition(l.task.state, signal); if (!next) return null; l.task.state = next; if (message) l.task.message = message; if (next === 'done' || next === 'failed') l.task.finishedAt = new Date(this.now()).toISOString(); if (next === 'working') l.task.hidden = false; this.bump(); return l.task; }
-  protected bump(): void { this.version++; for (const w of this.waiters.splice(0)) w(); this.deps.emit({ kind: 'tasks', approved: this.plan?.approved === true, tasks: this.tasks() }); }
-  exited(paneId: string): void { this.launched.delete(paneId); this.signal(paneId, 'exit', 'Process exited without a report.'); }
+  protected signal(paneId: string, signal: Signal, message = ''): Task | null { const l = this.live.get(paneId); if (!l) return null; const next = transition(l.task.state, signal); if (!next) return null; l.task.state = next; if (message) l.task.message = message; if (next === 'done' || next === 'failed') l.task.finishedAt = new Date(this.now()).toISOString(); if (next === 'working') l.task.hidden = false; if (next !== 'working') this.nudge(l.task); this.bump(); return l.task; }
+  /** A task needs the orchestrator but no `task wait` covers it: after a short quiet period, type one line into the orchestrator so an idle session wakes up. */
+  private nudge(t: Task): void {
+    if ([...this.watchers].some(ids => ids.includes(t.id))) return;
+    this.nudges.set(t.id, t); if (this.nudgeTimer) return;
+    this.nudgeTimer = setTimeout(() => {
+      this.nudgeTimer = null; const due = [...this.nudges.values()].filter(x => ![...this.watchers].some(ids => ids.includes(x.id))); this.nudges.clear();
+      if (!due.length || !this.orchestratorLive || !this.server) return;
+      const line = `[AlphaCode] ${due.map(x => `${x.id} is ${taskLabel(x)}${x.message ? `: ${x.message.slice(0, 160)}` : ''}`).join('; ')}. Run alphacode task status.`.replace(/[\x00-\x1f\x7f]+/g, ' ');
+      const paneId = this.deps.roles.orchestratorPaneId;
+      try { this.writer(paneId, line); setTimeout(() => { try { this.writer(paneId, '\r'); } catch (error) { this.deps.log(`nudge enter: ${(error as Error).message}`); } }, 100); } catch (error) { this.deps.log(`nudge: ${(error as Error).message}`); }
+    }, this.deps.nudgeDelayMs ?? 20000);
+  }
+  protected bump(): void { this.version++; for (const w of this.waiters.splice(0)) w(); this.deps.emit({ kind: 'tasks', approved: this.plan?.approved === true, finished: this.summary, tasks: this.tasks() }); }
+  exited(paneId: string): void { if (paneId === this.deps.roles.orchestratorPaneId) this.orchestratorLive = false; this.launched.delete(paneId); this.signal(paneId, 'exit', 'Process exited without a report.'); }
   typed(paneId: string): void { const l = this.live.get(paneId); if (!l) return; if (l.task.state === 'done' || l.task.state === 'failed') { if (!l.task.hidden) { l.task.hidden = true; this.bump(); } return; } this.signal(paneId, 'typed'); }
   approve(): void { if (this.plan) { this.plan.approved = true; this.bump(); } }
   protected authorized(req: IncomingMessage, expected: string): boolean { const got = (req.headers.authorization || '').replace(/^Bearer\s+/i, ''); return got.length === expected.length && timingSafeEqual(Buffer.from(got), Buffer.from(expected)); }
   protected mintTask(task: Task, prompt: string): Live { const hookToken = token(); return { task, prompt, hookToken, hooksFile: join(this.deps.runDir, `hooks-${task.paneId}.json`) }; }
-  protected hooksJson(t: Pick<Task, 'allow' | 'dirs'>): string { const shim = join(this.deps.runDir, 'alphacode.cmd').replace(/\\/g, '/'); const hook = (k: string) => [{ hooks: [{ type: 'command', command: `"${shim}" report ${k}` }] }]; return JSON.stringify({ hooks: { Stop: hook('stop'), Notification: hook('waiting') }, permissions: { allow: [...WORKER_ALLOW, ...(t.allow || [])], additionalDirectories: [this.deps.runDir, ...(t.dirs || [])] } }); }
+  protected hooksJson(t: Pick<Task, 'allow' | 'dirs' | 'reviews'>): string { const shim = join(this.deps.runDir, 'alphacode.cmd').replace(/\\/g, '/'); const hook = (k: string) => [{ hooks: [{ type: 'command', command: `"${shim}" report ${k}` }] }]; return JSON.stringify({ promptSuggestionEnabled: false, hooks: { Stop: hook('stop'), Notification: hook('waiting') }, permissions: { allow: [...(t.reviews ? REVIEWER_ALLOW : WORKER_ALLOW), ...(t.allow || [])], ...(t.reviews ? { deny: REVIEWER_DENY } : {}), additionalDirectories: [this.deps.runDir, ...(t.dirs || [])] } }); }
   protected uuid(): string { return randomUUID(); }
   protected ensureId(id: string): string { return validateId(id); }
 }

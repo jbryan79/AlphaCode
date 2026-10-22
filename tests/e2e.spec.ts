@@ -9,14 +9,32 @@ import { execFileSync } from 'node:child_process';
 
 const root=resolve(__dirname,'..'),dataDir=join(root,'work','e2e-state');
 let app:ElectronApplication,page:Page;const errors:string[]=[];
+// Destructive steps ask in an in-app dialog; `maybe` is for steps that ask only while a session runs.
+const confirmWith=(label:string)=>page.getByRole('alertdialog').getByRole('button',{name:label,exact:true}).click();
+const maybeConfirmWith=(label:string)=>page.getByRole('alertdialog').getByRole('button',{name:label,exact:true}).click({timeout:2000}).catch(()=>{});
 async function launch(){
   const env={...process.env,ALPHACODE_DATA_DIR:dataDir};delete env.ELECTRON_RUN_AS_NODE;
   app=await electron.launch({args:[root],env});page=await app.firstWindow();
   page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+  // The app opens on Chat; the workspace tests run in Orchestration.
+  await expect(page.getByRole('tab',{name:'Chat',exact:true})).toHaveAttribute('aria-selected','true');
+  await page.getByRole('tab',{name:/^Orchestration/}).click();
   await expect(page.getByRole('button',{name:'Add pane',exact:true})).toBeVisible();
 }
 test.beforeAll(async()=>{await rm(dataDir,{recursive:true,force:true});await mkdir(dataDir,{recursive:true});await launch();});
 test.afterAll(async()=>{await app?.close();});
+test('Multimodel shell: Chat view, Support dock in the source folder, plan badge',async()=>{
+  await expect(page).toHaveTitle('Multimodel by JABSystems');
+  await expect(page.locator('.app-statusbar .plan-badge')).toHaveText('PlatinumUnlimited credits');
+  const support=page.getByRole('complementary',{name:'Support agent'});
+  await expect(support).toBeVisible();await expect(support.locator('.solo-folder')).toHaveText(root);
+  await page.getByRole('button',{name:'Hide Support',exact:true}).click();await expect(support).toBeHidden();
+  await page.getByRole('button',{name:'Support',exact:true}).click();await expect(support).toBeVisible();
+  await page.getByRole('tab',{name:'Chat',exact:true}).click();
+  const chat=page.getByRole('region',{name:'Chat'});
+  await expect(chat).toBeVisible();await expect(page.locator('.sidebar')).toHaveCount(0);await expect(page.getByRole('button',{name:'Add pane',exact:true})).toBeHidden();
+  await page.getByRole('tab',{name:/^Orchestration/}).click();await expect(chat).toBeHidden();
+});
 test('production dashboard, real terminals, layout editing and persistence',async()=>{
   await expect(page.locator('.pane')).toHaveCount(8);
   await expect(page.locator('.pane[data-pane-title="PowerShell Admin"] .pane-status')).toHaveText('Ready');
@@ -50,7 +68,21 @@ test('production dashboard, real terminals, layout editing and persistence',asyn
   await expect(page.locator('.vault-section .vault-meta')).toContainText(/\d+ projects · \d+ notes/);
   await page.getByRole('button',{name:'Duplicate Operations',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(9);
   await expect(page.locator('.pane[data-pane-title="Operations copy"] .pane-status')).toHaveText('Ready');
-  await page.getByRole('button',{name:'Close Operations copy',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(8);
+  // Sidebar right-click: Configure opens the editor; Delete on a running pane warns first, and Cancel keeps it.
+  const copyRow=page.locator('.pane-list-item',{has:page.locator('.pane-list-name',{hasText:/^Operations copy$/})});
+  await copyRow.click({button:'right'});await expect(page.getByRole('menu')).toBeVisible();
+  await expect(copyRow).toHaveAttribute('aria-current','true');await expect(page.locator('.pane[data-pane-title="Operations copy"]')).toHaveClass(/focused/);
+  await page.getByRole('menuitem',{name:'Configure…'}).click();await expect(page.getByRole('menu')).toHaveCount(0);
+  await expect(page.getByLabel('Pane name',{exact:true})).toHaveValue('Operations copy');await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.locator('.pane[data-pane-title="Operations copy"]').getByRole('button',{name:'Start session'}).click();
+  await expect(page.locator('.pane[data-pane-title="Operations copy"] .pane-status')).toHaveText('running');
+  await copyRow.click({button:'right'});await page.keyboard.press('Escape');await expect(page.getByRole('menu')).toHaveCount(0);
+  await copyRow.click({button:'right'});await page.getByRole('menuitem',{name:'Delete pane'}).click();
+  const warning=page.getByRole('alertdialog');await expect(warning).toContainText('Operations copy is running. Deleting the pane ends its session.');
+  await warning.getByRole('button',{name:'Cancel'}).click();await expect(page.locator('.pane')).toHaveCount(9);
+  await page.getByRole('button',{name:'Close Operations copy',exact:true}).click(); // the header X warns the same way
+  await page.getByRole('alertdialog').getByRole('button',{name:'End session and delete'}).click();await expect(page.locator('.pane')).toHaveCount(8);
+  await expect(page.locator('.pane.focused')).toHaveCount(1); // focus moved to a neighbour
   await page.getByRole('button',{name:'Lock layout',exact:true}).click();await expect(page.getByRole('button',{name:'Move Operations up',exact:true})).toBeDisabled();
   await page.getByRole('button',{name:'Unlock layout',exact:true}).click();
   // Panes take their size from the window: there is no resize handle, even with the layout unlocked.
@@ -94,19 +126,19 @@ test('local models, optional pane menu, named workspaces and preset counts',asyn
     await page.locator('.dropdown').getByRole('button',{name:'CMD',exact:true}).click();await page.getByLabel('Pane name',{exact:true}).fill('Quick shell');await page.getByRole('button',{name:'Apply changes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(10);
     await page.getByRole('button',{name:'Save as',exact:true}).click();await page.getByLabel('Workspace name',{exact:true}).fill('SQL Day');await page.getByRole('button',{name:'Save workspace',exact:true}).click();
     await expect(page.getByLabel('Load workspace')).toContainText('SQL Day');
-    await page.getByRole('button',{name:'4 panes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(4);
+    await page.getByRole('button',{name:'4 panes',exact:true}).click();await confirmWith('Close 6 panes');await expect(page.locator('.pane')).toHaveCount(4);
     await page.getByRole('button',{name:'6 panes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(6);
     // A single session fills the grid; Close all empties the workspace and the empty state offers a fresh pane.
-    await page.getByRole('button',{name:'1 pane',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(1);
+    await page.getByRole('button',{name:'1 pane',exact:true}).click();await confirmWith('Close 5 panes');await expect(page.locator('.pane')).toHaveCount(1);
     const single=page.locator('.pane'),gridBox=(await page.locator('.react-grid-layout').boundingBox())!,singleBox=(await single.boundingBox())!;
     expect(singleBox.width).toBeGreaterThan(gridBox.width*0.95);
-    await page.getByRole('button',{name:'Close all',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(0);
+    await page.getByRole('button',{name:'Close all',exact:true}).click();await confirmWith('Close all panes');await expect(page.locator('.pane')).toHaveCount(0);
     await expect(page.getByRole('button',{name:'Close all',exact:true})).toHaveCount(0);
     await expect(page.locator('.empty-workspace')).toBeVisible();await page.getByRole('button',{name:'Add PowerShell',exact:true}).click();await page.getByRole('button',{name:'Apply changes',exact:true}).click();await expect(page.locator('.pane')).toHaveCount(1);
     await expect(page.locator('.app-statusbar')).toContainText('Saved locally');
     const state=await page.evaluate(()=>window.bridge.loadState());
     const sqlDay=state!.workspaces.find(w=>w.name==='SQL Day');if(!sqlDay)throw new Error('Named workspace missing');
-    await page.getByLabel('Load workspace').selectOption(sqlDay.id);await expect(page.locator('.pane')).toHaveCount(10);
+    await page.getByLabel('Load workspace').selectOption(sqlDay.id);await maybeConfirmWith('End sessions and load');await expect(page.locator('.pane')).toHaveCount(10);
     await expect(page.locator('.pane[data-pane-title="PowerShell Admin"] .pane-status')).toHaveText('Ready');
     expect(errors).toEqual([]);
   }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));}
@@ -140,16 +172,25 @@ test('orchestrate mode runs a two-task plan through stub workers', async () => {
   for (const name of ['Claude A', 'Claude B', 'Claude C', 'Claude D']) {
     await page.getByRole('button', { name: `Configure ${name}`, exact: true }).click();
     await page.getByLabel('Executable override (optional)', { exact: true }).fill(stub); await page.getByLabel('Working directory', { exact: true }).fill(repo);
-    await page.getByRole('button', { name: 'Apply changes' }).click();
+    await page.getByRole('button', { name: 'Apply changes' }).click(); await maybeConfirmWith('Apply and restart');
   }
   await page.locator('.pane[data-pane-title="Claude A"]').click();
-  await page.getByRole('button', { name: 'Turn orchestrate on', exact: true }).click();
-  await expect(page.locator('.pane')).toHaveCount(6);
-  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-role')).toHaveText('ORCH·FABLE');
+  // Max workers is the worker pane count: Claude A orchestrates, B and C work, D closes, and the four non-Claude panes stay.
+  await page.getByLabel('Max workers', { exact: true }).fill('2');
+  await page.getByRole('button', { name: 'Turn orchestrate on', exact: true }).click(); await confirmWith('Start run');
+  await expect(page.locator('.pane')).toHaveCount(7); await expect(page.locator('.pane[data-pane-title="Claude D"]')).toHaveCount(0);
+  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-role')).toHaveText('Orchestrator · fable');
   await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-header strong')).toHaveText('Orchestrator');
-  await expect(page.locator('.pane[data-pane-title="Claude B"] .pane-role')).toHaveText('WORKER');
-  await expect(page.locator('.tasks-section')).toContainText('Waiting for a plan');
-  await expect(page.getByRole('button', { name: 'Turn orchestrate off', exact: true })).toContainText('ON');
+  const workerB = page.locator('.pane[data-pane-title="Claude B"]');
+  await expect(workerB.locator('.pane-role')).toHaveText('Worker');
+  // A worker runs only what the run starts: no idle session, no Start button, and the header says so.
+  await expect(workerB.locator('.pane-status')).toHaveText('No session'); await expect(workerB.locator('.terminal-empty.held')).toContainText('Waiting for a task');
+  await expect(workerB.getByRole('button', { name: 'Start session' })).toHaveCount(0); await expect(workerB.getByRole('button', { name: 'Restart Claude B' })).toHaveCount(0);
+  await expect(workerB.getByRole('button', { name: 'Configure Claude B' })).toBeDisabled();
+  await page.locator('.pane-list-item', { has: page.locator('.pane-list-name', { hasText: /^Claude B$/ }) }).click({ button: 'right' });
+  await expect(page.getByRole('menuitem', { name: 'Delete pane' })).toBeDisabled(); await expect(page.getByRole('menuitem', { name: 'Configure…' })).toBeDisabled(); await page.keyboard.press('Escape');
+  await expect(page.locator('.run-header')).toContainText('Waiting for a plan');
+  await expect(page.getByRole('button', { name: 'Turn orchestrate off', exact: true })).toContainText('On');
   await expect(page.locator('.app-shell')).toHaveClass(/orchestrating/);  // Drive the control channel the way the orchestrator would, using the pane's own environment.
   const env = await page.evaluate(async () => (window as any).__orchestrateEnv);
   dir = await mkdtemp(join(tmpdir(), 'alphacode-plan-'));
@@ -157,17 +198,33 @@ test('orchestrate mode runs a two-task plan through stub workers', async () => {
   await writeFile(join(dir, 'plan.json'), JSON.stringify({ tests: '', tasks: [{ id: 'a', title: 'Alpha', files: ['a/'], model: 'sonnet', minutes: 5, advisor: false, prompt: 'a.md' }, { id: 'b', title: 'Beta', files: ['b/'], model: 'sonnet', minutes: 5, advisor: false, prompt: 'b.md' }] }));
   const cli = (...a: string[]) => execFileSync('node', [join(root, 'dist-electron', 'electron', 'cli.js'), ...a], { env: { ...process.env, ...env }, encoding: 'utf8' });
   cli('plan', join(dir, 'plan.json'));
-  await expect(page.locator('.task-row')).toHaveCount(2);
+  await expect(page.locator('.lane-bar.planned')).toHaveCount(2); await expect(page.locator('.run-header')).toContainText('Plan ready: 2 tasks across 2 workers');
+  // Planned is what comes next, not what runs: no model claimed, no session.
+  await expect(workerB.locator('.pane-header strong')).toHaveText('Next: Alpha'); await expect(workerB.locator('.pane-role')).toHaveText('Worker');
+  await expect(workerB.locator('.pane-status')).toHaveText('No session'); await expect(workerB.locator('.terminal-empty.held')).toContainText('Next: Alpha');
+  await page.screenshot({path:join(root,'work','orchestrate-planned.png')});
   await page.getByRole('button', { name: 'Approve plan', exact: true }).click();
   cli('task', 'start', 'a'); cli('task', 'start', 'b');
   await expect(page.locator('.pane-badge', { hasText: 'Task done' })).toHaveCount(2);
   await expect(page.locator('.pane-header.run-done strong', { hasText: 'Alpha' })).toHaveCount(1); // the task title is the pane's headline
-  await expect(page.locator('.pane-role', { hasText: 'WORKER·SONNET' })).toHaveCount(2);
+  await expect(page.locator('.pane-role', { hasText: 'Worker · sonnet' })).toHaveCount(2); await expect(page.locator('.lane-bar.done')).toHaveCount(2);
   expect(execFileSync('git', ['worktree', 'list'], { cwd: repo, encoding: 'utf8' })).toContain('task-a');
   expect(await readFile(join(repo, '.claude', 'worktrees', 'task-a', 'task-a.txt'), 'utf8')).toMatch(/^Task a in worktree task-a[\s\S]*A task$/); // prompt arrived through the file
   await expect(page.locator('.app-statusbar')).toContainText('2 done');
+  await page.screenshot({path:join(root,'work','orchestrate-done.png')});
   await writeFile(join(dir, 'r.md'), 'E2E finished.'); cli('finish', join(dir, 'r.md'));
-  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-badge')).toHaveText('Done');
+  await expect(page.locator('.pane[data-pane-title="Claude A"] .pane-badge')).toHaveText('Completed');
+  // Task messages carry commit ranges and comma lists with no spaces: at the narrowest sidebar they wrap, never push the row sideways.
+  const saved = (await page.evaluate(() => window.bridge.loadState()))!.workspaces.find(w => w.orchestrate?.tasks.length)!.orchestrate!.tasks;
+  const long = 'Review of p4-rt10b-cap-partition (b91bdce..0cec41f) touches ClaimsScreenProbes.cs,docs/orchestrate/plan.md,exceptions,inputs_changed.sql and the t9 Resolved section';
+  await app.evaluate(({ BrowserWindow }, tasks) => BrowserWindow.getAllWindows()[0].webContents.send('bridge:orchestrate-event', { kind: 'tasks', approved: true, tasks }), saved.map((t, n) => ({ ...t, message: long, state: n === 0 ? 'attention' : t.state })));
+  await expect(page.locator('.task-row .task-message').first()).toContainText('b91bdce..0cec41f');
+  const splitter = page.getByRole('separator', { name: 'Resize sidebar' }), sb = (await splitter.boundingBox())!;
+  await page.mouse.move(sb.x + 3, sb.y + 200); await page.mouse.down(); await page.mouse.move(sb.x - 300, sb.y + 200, { steps: 6 }); await page.mouse.up();
+  await expect.poll(async () => (await page.locator('.sidebar').boundingBox())?.width).toBeLessThan(210);
+  expect(await page.locator('.sidebar').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
+  for (const row of await page.locator('.task-row').all()) expect(await row.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
+  await page.locator('.tasks-section').screenshot({ path: join(root, 'work', 'orchestrate-tasks-narrow.png') });
   await page.getByRole('button', { name: 'Turn orchestrate off', exact: true }).click();
   await expect(page.locator('.pane-badge')).toHaveCount(0);
   expect(errors).toEqual([]);

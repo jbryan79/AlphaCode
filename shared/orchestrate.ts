@@ -27,6 +27,9 @@ export function conflicts(a: string, b: string): boolean {
 }
 /** Permission rules every worker gets: commit its own work and report. The orchestrator adds the project's build and test commands per task (`allow`). */
 export const WORKER_ALLOW = ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git branch --show-current)', 'Bash(alphacode report:*)'];
+/** A reviewer reads and runs checks but changes nothing: no commit, and file edits denied outright (deny wins over any allow). */
+export const REVIEWER_ALLOW = ['Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git branch --show-current)', 'Bash(alphacode verdict:*)', 'Bash(alphacode report:*)'];
+export const REVIEWER_DENY = ['Edit', 'Write', 'NotebookEdit'];
 /** The orchestrator drives the run, reviews diffs and merges. */
 export const ORCHESTRATOR_ALLOW = ['Bash(alphacode:*)', 'Bash(git:*)'];
 /** True when `dir` is `root` or inside it (Windows paths, case-insensitive). */
@@ -43,6 +46,7 @@ export function validatePlan(value: unknown, limits: { maxWorkers: number; worke
   const tasks: PlanTask[] = p.tasks.map((v: any) => {
     if (!v || typeof v !== 'object') fail('Each task is an object');
     const id = str(v.id, 'task id', 32); if (!ID_RE.test(id)) fail(`Task id ${JSON.stringify(id)} must match ^[a-z0-9-]{1,32}$`);
+    if (id.length > 24) fail(`Task id ${id} is longer than 24 characters; its reviews add -review`);
     if (!Array.isArray(v.files) || v.files.length < 1 || v.files.length > 200) fail(`Task ${id}: files lists 1 to 200 entries`);
     if (!PLAN_MODELS.includes(v.model)) fail(`Task ${id}: model must be one of ${PLAN_MODELS.join(', ')}`);
     if (!Number.isInteger(v.minutes) || v.minutes < 1 || v.minutes > 240) fail(`Task ${id}: minutes must be 1 to 240`);
@@ -72,12 +76,30 @@ export const promptHeader = (t: Pick<Task, 'id' | 'minutes' | 'files'>): string 
   `Files you own: ${t.files.join(', ')}. Do not touch any other file; if the task needs one, say so and stop.\n` +
   `Your work record: before you report, write docs/orchestrate/${t.id}.md in this worktree and commit it (this one file is yours even though it is not listed above). ` +
   `It states what you did, the files you changed, how you verified it (commands and results), and anything left undone or uncertain. Write it even if you cannot finish.\n` +
-  `When finished run: alphacode report done\nIf you cannot finish run: alphacode report failed "<one line reason>"\n\n`;
+  `When finished run: alphacode report done\nIf you cannot finish run: alphacode report failed "<one line reason>"\n` +
+  `If something outside your files blocks you, commit your record and run: alphacode report failed "blocked: <reason>"\n\n`;
+export const reviewId = (id: string, n: number): string => n <= 1 ? `${id}-review` : `${id}-review${n}`;
+/** The whole first prompt of a review: a fresh session that never saw the worker's conversation, judging the committed diff from the point the branch left. */
+export const reviewPrompt = (t: Pick<Task, 'id' | 'title' | 'files' | 'branch'>, rid: string, base: string, tests: string, criteria: string): string =>
+  `Review ${rid}: you are an independent reviewer of task ${t.id} ("${t.title}"). You did not write this change and have no stake in it passing.\n` +
+  `You are in its worktree on branch ${t.branch}. You are read-only: Edit and Write are disabled, and you must not commit, stash, reset or check out anything.\n` +
+  `The change under review is git diff ${base}..HEAD (history: git log ${base}..HEAD). Files the task owned: ${t.files.join(', ')}. A change to any other file is a finding, except docs/orchestrate/${t.id}.md.\n` +
+  `The worker's own record is docs/orchestrate/${t.id}.md. Treat what it claims as claims to check, not as evidence.\n` +
+  (tests ? `The project's test command is: ${tests}\nRun it. If it is not permitted here, say so in your findings instead of working around it.\n` : '') +
+  `\nCheck, in order: each acceptance criterion below against evidence from the diff or a command; correctness bugs, edge cases and failure paths in the changed code; anything the criteria ask for that the diff does not do.\n` +
+  `Fail only for defects that must be fixed before merge. Put minor points under a "Notes" heading.\n` +
+  `Finish with exactly one of these commands, the findings on stdin:\n` +
+  `alphacode verdict pass <<'EOF'\n<each criterion and the evidence it is met; then Notes>\nEOF\n` +
+  `alphacode verdict fail <<'EOF'\n<numbered findings: file:line, what is wrong, how it shows up, which criterion it breaks>\nEOF\n` +
+  `If you cannot complete the review run: alphacode report failed "<one line reason>"\n\n` +
+  `Acceptance criteria from the orchestrator:\n${criteria}\n`;
+/** Pane and task-list label: a finished review shows its verdict instead of Task done. */
+export const taskLabel = (t: Pick<Task, 'state' | 'verdict'>): string => t.state === 'done' && t.verdict ? (t.verdict === 'pass' ? 'Review passed' : 'Changes requested') : TASK_LABELS[t.state];
 // eslint-disable-next-line no-control-regex
 export const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][A-Za-z0-9]/g, '');
 export const lastLines = (text: string, n: number): string[] => text ? text.split(/\r?\n/).filter((l, i, a) => i < a.length - 1 || l !== '').slice(-n) : [];
 export const emptyOrchestrate = (): OrchestrateConfig => ({ on: false, orchestratorPaneId: '', maxWorkers: 5, approved: false, tasks: [] });
-const KEYS = ['on', 'orchestratorPaneId', 'maxWorkers', 'approved', 'tasks'], TASK_KEYS = ['id', 'title', 'files', 'model', 'minutes', 'advisor', 'allow', 'dirs', 'state', 'paneId', 'branch', 'worktree', 'startedAt', 'finishedAt', 'retries', 'sessionId', 'message', 'hidden'];
+const KEYS = ['on', 'orchestratorPaneId', 'maxWorkers', 'approved', 'tasks'], TASK_KEYS = ['id', 'title', 'files', 'model', 'minutes', 'advisor', 'allow', 'dirs', 'state', 'paneId', 'branch', 'worktree', 'startedAt', 'finishedAt', 'retries', 'sessionId', 'message', 'hidden', 'reviews', 'verdict'];
 /** Saved orchestrate block: never on after a load, live tasks become interrupted, no prompt text or tokens tolerated. */
 export function validateOrchestrate(value: unknown, paneIds: string[]): OrchestrateConfig {
   const o = value as Record<string, any>; if (!o || typeof o !== 'object') fail('Invalid orchestrate configuration');
@@ -92,7 +114,8 @@ export function validateOrchestrate(value: unknown, paneIds: string[]): Orchestr
     const paneId = v.paneId ? validateId(v.paneId) : '';
     const id = str(v.id, 'task id', 32); if (!ID_RE.test(id)) fail(`Task id ${JSON.stringify(id)} must match ^[a-z0-9-]{1,32}$`);
     const state: TaskState = v.state === 'working' || v.state === 'waiting' ? 'interrupted' : v.state;
-    return { id, title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, allow: list(v.allow, id, 'allow'), dirs: list(v.dirs, id, 'dirs'), state, paneId, branch: str(v.branch || '', 'branch', 200), worktree: str(v.worktree || '', 'worktree', 32768), startedAt: str(v.startedAt || '', 'startedAt', 40), finishedAt: str(v.finishedAt || '', 'finishedAt', 40), retries: v.retries, sessionId: str(v.sessionId || '', 'sessionId', 64), message: str(v.message || '', 'message', 2000), hidden: v.hidden === true };
+    return { id, title: str(v.title, 'task title', 100), files: v.files.map(normalizeFile), model: v.model, minutes: v.minutes, advisor: v.advisor === true, allow: list(v.allow, id, 'allow'), dirs: list(v.dirs, id, 'dirs'), state, paneId, branch: str(v.branch || '', 'branch', 200), worktree: str(v.worktree || '', 'worktree', 32768), startedAt: str(v.startedAt || '', 'startedAt', 40), finishedAt: str(v.finishedAt || '', 'finishedAt', 40), retries: v.retries, sessionId: str(v.sessionId || '', 'sessionId', 64), message: str(v.message || '', 'message', 2000), hidden: v.hidden === true,
+      ...(v.reviews ? { reviews: str(v.reviews, 'reviewed task id', 32), verdict: v.verdict === 'pass' || v.verdict === 'fail' ? v.verdict : '' } : {}) };
   }).filter((t: Task) => !t.paneId || paneIds.includes(t.paneId));
   if (new Set(tasks.map(t => t.id)).size !== tasks.length) fail('Duplicate task ids');
   return { on: false, orchestratorPaneId, maxWorkers: o.maxWorkers, approved: o.approved === true, tasks };

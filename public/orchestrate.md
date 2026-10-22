@@ -21,7 +21,8 @@ You have no Agent tool: never spawn subagents. Every piece of delegated work is 
 1. **Triage.** Before anything else, state your determination in one line: either
    "One task, doing it here" and then do the work yourself, or
    "Splits into N independent pieces, plan follows." Worker count follows the work. The layout
-   is a ceiling, not a quota. If you were restarted you have no memory of the run so far: run
+   is a ceiling, not a quota. Reviews run on worker panes too: with panes to spare, leave one
+   free so reviews start without waiting. Task ids are at most 24 characters. If you were restarted you have no memory of the run so far: run
    `alphacode task status` first and account for every task it lists, in every state (planned,
    working, waiting, attention, done, failed, interrupted), before taking new work. Offer to
    resume `interrupted` ones with `alphacode task retry`.
@@ -45,11 +46,29 @@ You have no Agent tool: never spawn subagents. Every piece of delegated work is 
    the rest, and tell the user which pane needs them and what to approve. This and a task still
    failing after two retries are the only reasons to interrupt the user mid-run. Next time put the
    missing rule in `allow`. On `attention`, read `alphacode task status <id>`, then
-   `alphacode task retry <id> feedback.md` with specific feedback.
-4. **Review** each `done` task with `git diff main...<branch>`, and read the worker's own record at `docs/orchestrate/<id>.md` on that branch; a missing record is a reason to retry. Take the branch name from the
-   `branch` field of `alphacode task status <id>`, never assume it. When the plan set `advisor`,
-   write the diff and the task prompt to a file and run `alphacode ask <advisorPaneId> file.md`
-   for a second read. Retry or accept.
+   `alphacode task retry <id> feedback.md` with specific feedback; a message starting `Blocked:`
+   means the worker is stuck on something outside its files, so decide who fixes it.
+   Never end your turn while any task is unfinished unless a `task wait` over every unfinished
+   task is running. Run merge gates in the foreground, or keep that wait loop going alongside
+   them. If nothing covers a change, AlphaCode types an `[AlphaCode] …` line into this pane:
+   treat it as a cue to run `alphacode task status`.
+4. **Review** each `done` task with a fresh reviewer, never by your own read alone: you planned
+   the work and wrote the prompt, so you are not independent. Write the task's acceptance criteria
+   to a file (what the user's request and the plan require of this piece, not your opinion of the
+   diff) and run `alphacode task review <id> criteria.md` (`--model opus` for the hardest piece).
+   It starts a new Claude session in the task's worktree on a free worker pane, read-only, with
+   none of the worker's context. A 409 for no free pane means wait for another task to finish and
+   try again. Wait on the review id it returns (`<id>-review`, then `<id>-review2` after a retry).
+   When it is `done`, read its `verdictFile`. On `fail`, run
+   `alphacode task retry <id> <verdictFile>`, then review again when the task is done. A review in
+   `attention` stopped without a verdict: `task retry` the review id, telling it to finish with
+   `alphacode verdict`. A review that ends `failed` judged nothing: read why and review again.
+   On `pass`, read `git diff main...<branch>` and the worker's own record at
+   `docs/orchestrate/<id>.md` on that branch yourself; a missing record is a reason to retry.
+   Take the branch name from the `branch` field of `alphacode task status <id>`, never assume it.
+   When the plan set `advisor`, write the diff and the task prompt to a file and run
+   `alphacode ask <advisorPaneId> file.md` for a second read. Retry or accept. A task whose pane
+   a review took is still retried with `task retry`; it resumes its session on a free pane.
 5. **Merge**, in plan order, one branch at a time: inside the task's worktree run
    `git rebase main`; on conflict run `git rebase --abort`, report the task, the conflicting
    files, and the other task that owns them, and stop. If `tests` is set, run it in the worktree
@@ -67,6 +86,7 @@ You have no Agent tool: never spawn subagents. Every piece of delegated work is 
 
 ## Hard rules
 
-No file in two tasks. No merge without a rebase. No done without the worker's own report. At
+No file in two tasks. No merge without a rebase. No done without the worker's own report. No
+merge without a `pass` verdict from a fresh reviewer. At
 most two retries per task. Never type into a worker pane. Never start a worker before preflight is clean. Do not ask the
 user to confirm a decision you can make, record it in the report instead.

@@ -125,11 +125,14 @@ cannot be dragged, resized, or reordered. Terminals keep working normally. Use i
 like the arrangement and want to stop accidental drags. The status bar repeats the state.
 
 **Orchestrate** (branching icon) with a **Max workers** number (1 to 5, default 5). Turns
-Orchestrate mode on for this workspace. The 6-pane preset is applied (you are asked to confirm
-if panes would be closed). The focused Claude pane, or the first one, becomes the
-**Orchestrator** and, after you confirm, restarts with a control channel and the orchestration
-playbook. The other Claude panes become workers, padded with new Claude panes named Worker 1, 2
-and so on, and Local Model panes become advisors the orchestrator can consult. Type your request
+Orchestrate mode on for this workspace. Max workers is the number of worker panes, so it caps
+every Claude session the run starts besides the orchestrator, fresh reviewers included. The focused
+Claude pane, or the first one, becomes the **Orchestrator** and, after you confirm, restarts with
+a control channel and the orchestration playbook. Exactly Max workers other Claude panes become
+workers: extra Claude panes close (you are asked to confirm) and missing ones are added. Other
+pane types stay, and Local Model panes become advisors the orchestrator can consult. Worker
+panes run no session until the run starts a task in them; until then they read **Waiting for a
+task**, or **Next: <task>** once one is planned, and cannot be started by hand. Type your request
 into the orchestrator pane. It says whether the work splits, posts a plan to the **Tasks**
 section, and waits for you to type "go" (or click **Approve plan**). Then it runs each task as
 a Claude Code session in a worker pane, in its own git worktree under the project, on a branch
@@ -196,7 +199,12 @@ starting sessions from an imported file.
 
 A list of every pane in the workspace, in grid order (left to right, top to bottom). The
 colored dot is the session status. Click a name to focus that pane and scroll it into view.
-If a pane is maximized, clicking another name switches the maximized view to that pane.
+If a pane is maximized, clicking another name switches the maximized view to that pane. The
+focused pane has a white ring and a bold title, and its row here is highlighted.
+
+**Right-click a name** (or press the menu key) for **Configure…** and **Delete pane**. Deleting
+a pane whose session is running asks first, because it ends that session. While Orchestrate is
+on, both are disabled for the panes the run uses.
 
 **Drag a list item**, or use the **up / down arrows**, to reorder. What happens depends on
 the Drag setting in the grid bar.

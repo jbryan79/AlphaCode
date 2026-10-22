@@ -23,12 +23,12 @@ export class StateStore {
   async load():Promise<AppState|null>{
     let invalid=false;
     for(const path of [this.path,this.path+'.bak']){try{const state=validateState(JSON.parse(await readFile(path,'utf8')));this.recoveryRequired=false;this.current=state;return state;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')invalid=true;}}
-    if(invalid){this.recoveryRequired=true;throw new Error(`Saved workspace state is corrupt or invalid and no valid backup is available. Original files are preserved at ${this.path} and ${this.path}.bak. Move the invalid files aside, restart AlphaCode, then import a known-good workspace to recover.`);}
+    if(invalid){this.recoveryRequired=true;throw new Error(`Saved workspace state is corrupt or invalid and no valid backup is available. Original files are preserved at ${this.path} and ${this.path}.bak. Move the invalid files aside, restart Multimodel, then import a known-good workspace to recover.`);}
     this.recoveryRequired=false;
     return null;
   }
   save(value:unknown):Promise<void>{
-    if(this.recoveryRequired)return Promise.reject(new Error('State recovery is required. Automatic saves are blocked to preserve the original invalid files. Move them aside and restart AlphaCode before saving.'));
+    if(this.recoveryRequired)return Promise.reject(new Error('State recovery is required. Automatic saves are blocked to preserve the original invalid files. Move them aside and restart Multimodel before saving.'));
     let state:AppState;try{state=validateState(value);}catch(error){return Promise.reject(error);}
     this.current=state;
     const next=this.writes.catch(()=>{}).then(async()=>{await mkdir(dirname(this.path),{recursive:true});const temporary=this.path+'.tmp';await writeFile(temporary,JSON.stringify(state,null,2),'utf8');try{validateState(JSON.parse(await readFile(this.path,'utf8')));await copyFile(this.path,this.path+'.bak');}catch{}await replace(temporary,this.path);});this.writes=next;return next;
@@ -36,7 +36,7 @@ export class StateStore {
   /** Resolves once every save accepted so far has reached disk; quitting waits on this. */
   flush():Promise<void>{return this.writes.catch(()=>{});}
 }
-export function assertNormalToken(elevated:boolean):void {if(elevated)fail('AlphaCode must run without Administrator privileges. Close it and start it normally; elevate only the Admin PowerShell pane.');}
+export function assertNormalToken(elevated:boolean):void {if(elevated)fail('Multimodel must run without Administrator privileges. Close it and start it normally; elevate only the Admin PowerShell pane.');}
 export interface HelperConfig {paneId:string;cwd:string;cols:number;rows:number;pipe:string;nonce:string;shell:'powershell'}
 export function decodeHelperConfig(encoded:string):HelperConfig {
   if(encoded.length>100000||!/^[A-Za-z0-9+/=]+$/.test(encoded))fail('Invalid helper configuration.');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { conflicts, emptyOrchestrate, insideRoot, lastLines, normalizeFile, promptHeader, stripAnsi, transition, validateOrchestrate, validatePlan } from '../shared/orchestrate';
-import { applyPreset, validateWorkspace } from '../shared/domain';
+import { conflicts, emptyOrchestrate, insideRoot, lastLines, normalizeFile, promptHeader, reviewId, stripAnsi, taskLabel, transition, validateOrchestrate, validatePlan } from '../shared/orchestrate';
+import { applyPreset, conductorLayout, createPane, orchestrateLayout, validateWorkspace } from '../shared/domain';
 import type { Task, Workspace } from '../shared/types';
 
 const task = (over: Partial<Task> = {}): Task => ({ id: 'api', title: 'API', files: ['electron/api.ts'], model: 'sonnet', minutes: 20, advisor: false, state: 'planned', paneId: 'p2', branch: '', worktree: '', startedAt: '', finishedAt: '', retries: 0, sessionId: '', message: '', hidden: false, ...over });
@@ -64,6 +64,7 @@ describe('prompt header and output helpers', () => {
     const h = promptHeader(task({ files: ['a.ts', 'b/'] }));
     expect(h).toContain('Task api in worktree task-api'); expect(h).toContain('Budget: 20 minutes'); expect(h).toContain('Files you own: a.ts, b/');
     expect(h).toContain('docs/orchestrate/api.md'); expect(h).toContain('alphacode report done'); expect(h).toContain('alphacode report failed'); expect(h.endsWith('\n\n')).toBe(true);
+    expect(h).toContain('alphacode report failed "blocked: <reason>"');
   });
   it('strips ANSI and returns the last lines', () => {
     expect(stripAnsi('\x1b[31mred\x1b[0m\r\nplain')).toBe('red\r\nplain');
@@ -97,6 +98,29 @@ describe('persistence', () => {
     expect(v.tasks[0].allow).toEqual(['Bash(npm test)']); expect(v.tasks[0].dirs).toEqual(['D:/shared']);
     expect(validateOrchestrate({ ...emptyOrchestrate(), tasks: [task({ id: 'a', paneId: 'p2' })] }, ['p2']).tasks[0].allow).toEqual([]);
   });
+  it('lays out the orchestrator plus exactly the worker count, keeping non-Claude panes', () => {
+    const c = (id: string) => ({ ...createPane('claude', 'D:\\Dev'), id, title: id }), sh = { ...createPane('powershell', 'D:\\Dev'), id: 'sh' }, lm = { ...createPane('local-model', 'D:\\Dev'), id: 'lm' };
+    const many = orchestrateLayout({ ...ws, panes: [c('a'), sh, c('o'), c('b'), c('c'), lm, c('d')], layout: [] }, 'o', 2);
+    expect(many.panes.map(p => p.id)).toEqual(['a', 'sh', 'o', 'b', 'lm']); expect(many.layout.map(l => l.i)).toEqual(many.panes.map(p => p.id));
+    const few = orchestrateLayout({ ...ws, panes: [c('o'), lm], layout: [] }, 'o', 3);
+    expect(few.panes.filter(p => p.type === 'claude')).toHaveLength(4); expect(few.panes.slice(0, 2).map(p => p.id)).toEqual(['o', 'lm']);
+    expect(orchestrateLayout({ ...ws, panes: [sh], layout: [] }, '', 3).panes.filter(p => p.type === 'claude')).toHaveLength(3); // no orchestrator yet: the caller asks for workers + 1
+  });
+  it('gives the orchestrator a full-height column and tiles the run beside it with no orphan cell', () => {
+    const c = (id: string) => ({ ...createPane('claude', 'D:\\Dev'), id }), sh = { ...createPane('powershell', 'D:\\Dev'), id: 'sh' }, lm = { ...createPane('local-model', 'D:\\Dev'), id: 'lm' };
+    const box = (l: { x: number; y: number; w: number; h: number }) => [l.x, l.y, l.w, l.h];
+    expect(conductorLayout([c('o')], 'o').map(box)).toEqual([[0, 0, 12, 4]]);
+    expect(conductorLayout([c('o'), c('a'), c('b')], 'o').map(box)).toEqual([[0, 0, 6, 8], [6, 0, 6, 4], [6, 4, 6, 4]]);
+    const four = conductorLayout([c('a'), c('o'), c('b'), lm, c('d'), sh], 'o'), by = (id: string) => box(four.find(l => l.i === id)!);
+    expect(by('o')).toEqual([0, 0, 4, 8]); expect([by('a'), by('b'), by('lm'), by('d')]).toEqual([[4, 0, 4, 4], [8, 0, 4, 4], [4, 4, 4, 4], [8, 4, 4, 4]]);
+    expect(by('sh')).toEqual([0, 0, 12, 4]); // side panes get their own grid
+    for (let n = 1; n <= 7; n++) {
+      const panes = [c('o'), ...Array.from({ length: n }, (_, i) => c(`w${i}`))], layout = conductorLayout(panes, 'o');
+      const lead = layout[0], cells = layout.slice(1), area = cells.reduce((s, l) => s + l.w * l.h, 0);
+      expect(cells.every(l => l.x + l.w === 12 || l.x + l.w === 12 - (n >= 3 ? 4 : 0))).toBe(true);
+      expect(area).toBe((12 - lead.w) * lead.h); // the cells exactly fill the area beside the orchestrator
+    }
+  });
   it('pads presets with the requested pane type', () => {
     const w = applyPreset({ ...ws, panes: [], layout: [] }, 6, 'claude');
     expect(w.panes).toHaveLength(6); expect(w.panes.every(p => p.type === 'claude')).toBe(true);
@@ -118,7 +142,7 @@ async function fixture(over: Partial<RunDeps> = {}) {
     runDir, execPath: 'C:\\App\\AlphaCode.exe', cliPath: 'C:\\App\\dist-electron\\electron\\cli.js', playbookPath: 'C:\\Data\\orchestrate.md',
     roles: { workspaceId: 'w', root: 'D:\\Dev\\repo', orchestratorPaneId: 'p1', workerPaneIds: ['p2', 'p3'], advisorPaneIds: ['p4'], maxWorkers: 5 },
     panes: () => [pane('p1'), pane('p2'), pane('p3'), pane('p4', 'local-model')],
-    git: async args => { gits.push(args); if (args[0] === 'status') return ''; if (args[0] === 'rev-parse') return 'true\n'; if (args[0] === 'worktree') return 'worktree D:/Dev/repo\nbranch refs/heads/main\n\nworktree D:/Dev/repo/.claude/worktrees/task-api\nbranch refs/heads/task-api\n\n'; return ''; },
+    git: async args => { gits.push(args); if (args[0] === 'status') return ''; if (args[0] === 'rev-parse') return 'true\n'; if (args[0] === 'merge-base') return 'abc1234\n'; if (args[0] === 'worktree') return 'worktree D:/Dev/repo\nbranch refs/heads/main\n\nworktree D:/Dev/repo/.claude/worktrees/task-api\nbranch refs/heads/task-api\n\n'; return ''; },
     launch: async id => { launches.push(id); }, chat: async (_id, prompt) => { chats.push(prompt); return 'advice'; },
     finish: async report => { finishes.push(report); }, emit: e => events.push(e), log: () => {}, ...over,
   };
@@ -209,6 +233,7 @@ describe('control server', () => {
     const sid = f.run.tasks()[0].sessionId; expect(sid).not.toBe('');
     expect((await call(f.run, f.run.controlToken, 'POST', '/tasks/api/start')).status).toBe(409); expect(f.run.tasks()[0].sessionId).toBe(sid);
     const o = f.run.overrides('p2')!; expect(o.args).toContain('--worktree'); expect(o.cwd).toBe(f.deps.roles.root); expect(o.env!.ALPHACODE_CONTROL_TOKEN).toBeUndefined(); expect(o.env!.ALPHACODE_HOOK_TOKEN).toBe(f.run.hookTokenFor('p2')); expect(o.env!.ALPHACODE_RUN_DIR_SHIM).toBe(f.runDir);
+    expect(o.env!.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION).toBe('false'); expect(JSON.parse(await readFile(join(f.runDir, 'hooks-p2.json'), 'utf8')).promptSuggestionEnabled).toBe(false); // a finished worker leaves its input empty
     const file = join(f.runDir, 'task-api.md'); expect(o.args!.at(-1)).toBe(`Read the file ${file} and carry out the task it describes.`); // the prompt travels as a file, not argv
     expect(await readFile(file, 'utf8')).toBe(promptHeader(f.run.tasks()[0]) + 'Build the endpoint.');
     release(); expect((await first).status).toBe(200);
@@ -278,6 +303,15 @@ describe('control server', () => {
     const fin = await call(f.run, f.run.controlToken, 'POST', '/finish', { report: '# Report\nAll good.' });
     expect(fin.status).toBe(200); expect(f.finishes).toEqual(['# Report\nAll good.']); expect(f.events.at(-1)).toEqual({ kind: 'finished', summary: 'All good.' });
     expect((await call(f.run, f.run.controlToken, 'POST', '/finish', { report: 'again' })).status).toBe(409);
+    await f.run.stop();
+  });
+  it('keeps the run completed through later task events until a plan adds tasks', async () => {
+    const f = await fixture();
+    await call(f.run, f.run.controlToken, 'POST', '/plan', planBody);
+    await call(f.run, f.run.controlToken, 'POST', '/finish', { report: 'All good.' });
+    f.run.approve(); expect(f.events.at(-1)).toMatchObject({ kind: 'tasks', finished: 'All good.' });
+    await call(f.run, f.run.controlToken, 'POST', '/plan', { ...planBody, tasks: planBody.tasks.map((t: any) => ({ ...t, id: `${t.id}-2` })) });
+    expect(f.events.at(-1)).toMatchObject({ kind: 'tasks', finished: '' });
     await f.run.stop();
   });
 });
@@ -419,6 +453,139 @@ describe('alphacode command', () => {
     const bad = await run(['nope']); expect(bad.code).toBe(1); expect(bad.err).toMatch(/usage/i);
     expect((await run(['panes'], {})).err).toMatch(/ALPHACODE_CONTROL_URL/);
     await f.run.stop(); await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe('fresh reviewer', () => {
+  const C = (f: Awaited<ReturnType<typeof fixture>>) => f.run.controlToken;
+  const one = { tests: 'npm test', approved: true, tasks: [{ ...planBody.tasks[0], allow: ['Bash(npm test)'] }] };
+  async function doneApi(over: Partial<RunDeps> = {}) {
+    const f = await fixture(over); const seen: any[] = []; const inner = f.deps.launch; f.deps.launch = async id => { seen.push(f.run.overrides(id)); return inner(id); };
+    await call(f.run, C(f), 'POST', '/plan', one); await call(f.run, C(f), 'POST', '/tasks/api/start');
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    return { ...f, seen };
+  }
+  it('starts a new read-only session in the task worktree on a free pane, with the criteria and the branch point', async () => {
+    const f = await doneApi();
+    const r = await call(f.run, C(f), 'POST', '/tasks/api/review', { criteria: 'GET /x returns 200.' });
+    expect(r.status).toBe(200); expect(r.body).toMatchObject({ id: 'api-review', reviews: 'api', paneId: 'p3', state: 'working', model: 'sonnet', branch: 'task-api', worktree: 'D:/Dev/repo/.claude/worktrees/task-api', files: [], verdictFile: '' });
+    expect(f.launches).toEqual(['p2', 'p3']); expect(f.gits).toContainEqual(['merge-base', 'HEAD', 'task-api']);
+    const o = f.seen[1]; expect(o.cwd).toBe('D:/Dev/repo/.claude/worktrees/task-api'); expect(o.args).not.toContain('--worktree'); expect(o.args).not.toContain('--resume');
+    expect(o.args.slice(0, 4)).toEqual(['--model', 'sonnet', '--name', 'Review: API']); expect(o.args[o.args.indexOf('--session-id') + 1]).toBe(r.body.sessionId); expect(r.body.sessionId).not.toBe(f.run.tasks().find(t => t.id === 'api')!.sessionId);
+    const prompt = await readFile(join(f.runDir, 'task-api-review.md'), 'utf8');
+    expect(prompt.startsWith('Review api-review: you are an independent reviewer of task api')).toBe(true); expect(prompt).not.toContain('Files you own');
+    expect(prompt).toContain('git diff abc1234..HEAD'); expect(prompt).toContain('npm test'); expect(prompt).toContain('alphacode verdict fail'); expect(prompt.trimEnd().endsWith('GET /x returns 200.')).toBe(true);
+    const hooks = JSON.parse(await readFile(join(f.runDir, 'hooks-p3.json'), 'utf8'));
+    expect(hooks.permissions.allow).toContain('Bash(alphacode verdict:*)'); expect(hooks.permissions.allow).toContain('Bash(npm test)'); expect(hooks.permissions.allow).not.toContain('Bash(git commit:*)');
+    expect(hooks.permissions.deny).toEqual(['Edit', 'Write', 'NotebookEdit']);
+    expect(JSON.parse(await readFile(join(f.runDir, 'hooks-p2.json'), 'utf8')).permissions.deny).toBeUndefined(); // workers keep editing
+    await f.run.stop();
+  });
+  it('takes the verdict only from the reviewer, writes the findings file and shows the verdict', async () => {
+    const f = await doneApi();
+    await call(f.run, C(f), 'POST', '/tasks/api/review', { criteria: 'c' });
+    const hook = f.run.hookTokenFor('p3'), verdict = (body: object, token = hook, paneId = 'p3') => call(f.run, token, 'POST', '/verdict', { paneId, ...body });
+    expect((await call(f.run, C(f), 'POST', '/tasks/api/review', { criteria: 'c' })).body.error).toMatch(/already has review api-review/);
+    expect((await call(f.run, hook, 'POST', '/report', { paneId: 'p3', kind: 'done' })).body.error).toMatch(/verdict/);
+    expect((await verdict({ verdict: 'pass', findings: 'ok' }, f.run.hookTokenFor('p2'))).status).toBe(401);
+    expect((await verdict({ verdict: 'pass', findings: 'ok' }, f.run.hookTokenFor('p2'), 'p2')).body.error).toMatch(/Only a review/);
+    expect((await verdict({ verdict: 'maybe', findings: 'ok' })).status).toBe(400); expect((await verdict({ verdict: 'fail', findings: ' ' })).status).toBe(400);
+    const r = await verdict({ verdict: 'fail', findings: '\n1. electron/api.ts:3 returns 500\n2. no test' });
+    expect(r.status).toBe(200); expect(r.body.task).toMatchObject({ state: 'done', verdict: 'fail', message: '1. electron/api.ts:3 returns 500' });
+    const file = join(f.runDir, 'review-api-review.md'); expect(await readFile(file, 'utf8')).toBe('# FAIL: review of api\n\n1. electron/api.ts:3 returns 500\n2. no test\n');
+    expect((await call(f.run, C(f), 'GET', '/tasks/api-review')).body.verdictFile).toBe(file); expect((await call(f.run, C(f), 'GET', '/tasks/api')).body.verdictFile).toBeUndefined();
+    expect((await verdict({ verdict: 'pass', findings: 'late' })).status).toBe(409);
+    expect(taskLabel(f.run.tasks().find(t => t.id === 'api-review')!)).toBe('Changes requested'); expect(taskLabel({ state: 'done', verdict: 'pass' })).toBe('Review passed'); expect(taskLabel({ state: 'done' })).toBe('Task done');
+    // After the worker's fix, the next review gets the next id and reuses the finished reviewer pane.
+    f.run.alive = () => false; await call(f.run, C(f), 'POST', '/tasks/api/retry', { feedback: 'see findings' });
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    const again = await call(f.run, C(f), 'POST', '/tasks/api/review', { criteria: 'c', model: 'opus' });
+    expect(again.body).toMatchObject({ id: 'api-review2', paneId: 'p3', model: 'opus' }); expect(f.run.tasks().map(t => [t.id, t.paneId])).toEqual([['api', 'p2'], ['api-review2', 'p3'], ['api-review', 'p3']]);
+    await f.run.stop();
+  });
+  it('guards what can be reviewed and with what', async () => {
+    const f = await fixture();
+    await call(f.run, C(f), 'POST', '/plan', one); await call(f.run, C(f), 'POST', '/tasks/api/start');
+    expect((await call(f.run, C(f), 'POST', '/tasks/api/review', { criteria: 'c' })).body.error).toMatch(/is working; review it once it is done/);
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    expect((await call(f.run, C(f), 'POST', '/tasks/api/review', {})).status).toBe(400);
+    expect((await call(f.run, C(f), 'POST', '/tasks/api/review', { criteria: 'c', model: 'fable' })).body.error).toMatch(/haiku, sonnet, opus/);
+    expect((await call(f.run, C(f), 'POST', '/tasks/nope/review', { criteria: 'c' })).status).toBe(404);
+    await call(f.run, C(f), 'POST', '/tasks/api/review', { criteria: 'c' }); await call(f.run, f.run.hookTokenFor('p3'), 'POST', '/verdict', { paneId: 'p3', verdict: 'pass', findings: 'ok' });
+    expect((await call(f.run, C(f), 'POST', '/tasks/api-review/review', { criteria: 'c' })).body.error).toMatch(/is a review/);
+    const noBase = await doneApi({ git: async args => args[0] === 'status' ? '' : args[0] === 'merge-base' ? '' : args[0] === 'worktree' ? 'worktree D:/Dev/repo/.claude/worktrees/task-api\nbranch refs/heads/task-api\n' : 'true\n' });
+    expect((await call(noBase.run, C(noBase), 'POST', '/tasks/api/review', { criteria: 'c' })).body.error).toMatch(/branched from/); expect(noBase.launches).toEqual(['p2']);
+    expect(() => validatePlan(plan([t('a'.repeat(25), ['x'])]), limits)).toThrow(/24 characters/); expect(reviewId('a', 1)).toBe('a-review'); expect(reviewId('a', 3)).toBe('a-review3');
+    await f.run.stop(); await noBase.run.stop();
+  });
+  it('with one worker pane, reviews on the task pane and a retry resumes the task there without typing into the reviewer', async () => {
+    const typed: string[] = []; const f = await doneApi({ roles: { workspaceId: 'w', root: 'D:\\Dev\\repo', orchestratorPaneId: 'p1', workerPaneIds: ['p2'], advisorPaneIds: [], maxWorkers: 5 } });
+    f.run.writer = (_id, d) => { typed.push(d); }; f.run.alive = () => true;
+    const apiSession = f.run.tasks()[0].sessionId;
+    expect((await call(f.run, C(f), 'POST', '/tasks/api/review', { criteria: 'c' })).body.paneId).toBe('p2');
+    expect(f.run.tasks().map(t => [t.id, t.state])).toEqual([['api-review', 'working'], ['api', 'done']]);
+    expect((await call(f.run, C(f), 'GET', '/tasks/api')).body.state).toBe('done'); // still listed from history
+    expect((await call(f.run, C(f), 'POST', '/tasks/api/retry', { feedback: 'fix' })).body.error).toMatch(/No free worker pane/); // the reviewer is busy
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/verdict', { paneId: 'p2', verdict: 'fail', findings: 'broken' });
+    const r = await call(f.run, C(f), 'POST', '/tasks/api/retry', { feedback: 'fix' });
+    expect(r.status).toBe(200); expect(typed).toEqual([]); expect(f.launches).toEqual(['p2', 'p2', 'p2']);
+    expect(f.seen[2].args.slice(0, 2)).toEqual(['--resume', apiSession]); expect(f.seen[2].cwd).toBe('D:/Dev/repo/.claude/worktrees/task-api');
+    expect(f.run.tasks().map(t => [t.id, t.paneId, t.state])).toEqual([['api', 'p2', 'working'], ['api-review', 'p2', 'done']]);
+    await f.run.stop();
+  });
+  it('persists the review link and verdict, and the command line reviews and gives verdicts', async () => {
+    const v = validateOrchestrate({ ...emptyOrchestrate(), tasks: [task({ id: 'api-review', paneId: 'p2', files: [], reviews: 'api', verdict: 'pass' }), task({ id: 'b', paneId: 'p2' })] }, ['p2']);
+    expect(v.tasks[0]).toMatchObject({ reviews: 'api', verdict: 'pass' }); expect('reviews' in v.tasks[1]).toBe(false);
+    const f = await doneApi(); const dir = await mkTemp(join(tmpdir(), 'alphacode-cli-'));
+    const ctl = { ALPHACODE_CONTROL_URL: `http://127.0.0.1:${f.run.port}`, ALPHACODE_CONTROL_TOKEN: f.run.controlToken };
+    await write(join(dir, 'c.md'), 'criteria'); const started = await cli(['task', 'review', 'api', join(dir, 'c.md'), '--model', 'opus'], ctl, null);
+    expect(started.code).toBe(0); expect(JSON.parse(started.out)).toMatchObject({ id: 'api-review', model: 'opus' });
+    expect((await cli(['task', 'review', 'api'], ctl, null)).err).toMatch(/usage/i);
+    const hook = { ALPHACODE_CONTROL_URL: ctl.ALPHACODE_CONTROL_URL, ALPHACODE_HOOK_TOKEN: f.run.hookTokenFor('p3'), ALPHACODE_PANE_ID: 'p3' };
+    expect((await cli(['verdict', 'pass'], hook, null)).err).toMatch(/stdin/);
+    expect((await cli(['verdict', 'pass'], ctl, Readable.from(['ok']))).err).toMatch(/reviewer pane/);
+    expect((await cli(['verdict', 'pass'], hook, Readable.from(['All criteria met.\n', 'Notes: none\n']))).code).toBe(0);
+    expect(await readFile(join(f.runDir, 'review-api-review.md'), 'utf8')).toBe('# PASS: review of api\n\nAll criteria met.\nNotes: none\n');
+    await f.run.stop(); await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe('nothing goes unnoticed', () => {
+  const C = (f: Awaited<ReturnType<typeof fixture>>) => f.run.controlToken;
+  const one = { tests: '', approved: true, tasks: [planBody.tasks[0]] };
+  const settle = (ms = 80) => new Promise(r => setTimeout(r, ms));
+  it('turns a worker\'s own waiting report into Needs attention with the reason', async () => {
+    const f = await fixture(); await call(f.run, C(f), 'POST', '/plan', one); await call(f.run, C(f), 'POST', '/tasks/api/start');
+    const hook = f.run.hookTokenFor('p2');
+    await call(f.run, hook, 'POST', '/report', { paneId: 'p2', kind: 'waiting' }); expect(f.run.tasks()[0].state).toBe('working'); // a hook with no stdin still means nothing
+    await call(f.run, hook, 'POST', '/report', { paneId: 'p2', kind: 'waiting', message: 'ClaimLoadProbes fails in files I do not own' });
+    expect(f.run.tasks()[0]).toMatchObject({ state: 'attention', message: 'Blocked: ClaimLoadProbes fails in files I do not own' });
+    await f.run.stop();
+  });
+  it('types one line into a run-launched orchestrator when a change has no task wait on it', async () => {
+    const typed: string[] = []; const f = await fixture({ nudgeDelayMs: 30 }); f.run.writer = (id, d) => { typed.push(`${id}:${d}`); };
+    f.run.overrides('p1'); // the orchestrator session this run launched
+    await call(f.run, C(f), 'POST', '/plan', { ...planBody, approved: true }); await call(f.run, C(f), 'POST', '/tasks/api/start'); await call(f.run, C(f), 'POST', '/tasks/ui/start');
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    await call(f.run, f.run.hookTokenFor('p3'), 'POST', '/report', { paneId: 'p3', kind: 'failed', message: 'tests\nred' });
+    expect(typed).toEqual([]); await settle(250);
+    expect(typed).toEqual(['p1:[AlphaCode] api is Task done; ui is Failed: tests red. Run alphacode task status.', 'p1:\r']); // one batched line, then Enter
+    await f.run.stop();
+  });
+  it('stays quiet when a task wait covers the change, or the orchestrator session is not the run\'s', async () => {
+    const typed: string[] = []; const f = await fixture({ nudgeDelayMs: 20 }); f.run.writer = (_id, d) => { typed.push(d); }; f.run.overrides('p1');
+    await call(f.run, C(f), 'POST', '/plan', one); await call(f.run, C(f), 'POST', '/tasks/api/start');
+    const waiting = call(f.run, C(f), 'GET', '/tasks/wait?ids=api&timeout=5'); await settle(30);
+    await call(f.run, f.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' });
+    expect((await waiting).body.changed).toBe(true); await settle(); expect(typed).toEqual([]);
+    const g = await fixture({ nudgeDelayMs: 20 }); const gTyped: string[] = []; g.run.writer = (_id, d) => { gTyped.push(d); }; // overrides('p1') never called: not the run's session
+    await call(g.run, C(g), 'POST', '/plan', one); await call(g.run, C(g), 'POST', '/tasks/api/start');
+    await call(g.run, g.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' }); await settle(); expect(gTyped).toEqual([]);
+    g.run.overrides('p1'); g.run.exited('p1'); // launched, then the orchestrator exited
+    expect((await call(g.run, C(g), 'POST', '/tasks/api/retry', { feedback: 'x' })).status).toBe(200);
+    await call(g.run, g.run.hookTokenFor('p2'), 'POST', '/report', { paneId: 'p2', kind: 'done' }); expect(g.run.tasks()[0].state).toBe('done');
+    await settle(); expect(gTyped).toEqual([]);
+    await f.run.stop(); await g.run.stop();
   });
 });
 

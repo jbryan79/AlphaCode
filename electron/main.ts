@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell, type IpcMainInvokeEvent, type IpcMainEvent } from 'electron';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { spawn } from 'node-pty';
@@ -16,6 +16,8 @@ import { ProviderClient } from './providers';
 import { MemoryVault } from './vault';
 
 const DEFAULT_ROOT=app.getPath('home');
+/** The source checkout behind this build: the app path in development, else the nearest folder above the packaged exe (release\Multimodel-win32-x64\…) that holds src\App.tsx. */
+const SOURCE_ROOT=(()=>{const candidates=[app.getAppPath()];for(let d=dirname(process.execPath),n=0;n<5&&dirname(d)!==d;n++,d=dirname(d))candidates.push(d);return candidates.find(c=>existsSync(join(c,'src','App.tsx'))&&existsSync(join(c,'package.json')))||'';})();
 if(process.env.ALPHACODE_DATA_DIR)app.setPath('userData',resolve(process.env.ALPHACODE_DATA_DIR));
 let window:BrowserWindow|null=null;
 let elevatedApp=false;
@@ -60,7 +62,7 @@ function listen(channel:string,fn:(...args:any[])=>void):void{ipcMain.on(channel
 function registerIpc():void{
   handle('bridge:load-state',()=>stateStore.load());
   handle('bridge:save-state',state=>stateStore.save(state));
-  handle('bridge:app-info',()=>({version:app.getVersion(),platform:process.platform,statePath:stateStore.path,appElevated:elevatedApp,root:DEFAULT_ROOT}));
+  handle('bridge:app-info',()=>({version:app.getVersion(),platform:process.platform,statePath:stateStore.path,appElevated:elevatedApp,root:DEFAULT_ROOT,sourceRoot:SOURCE_ROOT}));
   handle('bridge:choose-directory',async()=>{const result=await dialog.showOpenDialog(window!,{title:'Choose working directory',defaultPath:DEFAULT_ROOT,properties:['openDirectory','createDirectory']});return result.canceled?null:result.filePaths[0]||null;});
   handle('bridge:export-workspace',async value=>{const {orchestrate:_o,...workspace}=validateWorkspace(value);const result=await dialog.showSaveDialog(window!,{title:'Export workspace',defaultPath:`${workspace.name.replace(/[^a-zA-Z0-9 _-]/g,'_')}.json`,filters:[{name:'Workspace JSON',extensions:['json']}]});if(result.canceled||!result.filePath)return false;await writeFile(result.filePath,JSON.stringify({format:'alphacode-workspace',version:1,workspace},null,2),'utf8');return true;});
   handle('bridge:import-workspace',async()=>{const result=await dialog.showOpenDialog(window!,{title:'Import workspace configuration',properties:['openFile'],filters:[{name:'Workspace JSON',extensions:['json']}]});if(result.canceled||!result.filePaths[0])return null;const input=await readFile(result.filePaths[0],'utf8');if(input.length>4*1024*1024)throw new Error('Workspace file exceeds the 4 MB limit.');const data=JSON.parse(input);if(data.format!=='alphacode-workspace'||data.version!==1)throw new Error('Unsupported workspace export format.');return validateWorkspace(data.workspace);});
@@ -110,7 +112,7 @@ function lastWindow():{x?:number;y?:number;width?:number;height?:number;maximize
 }
 async function createWindow():Promise<void>{
   const last=lastWindow(); // ponytail: no display-bounds check; Electron clamps partially off-screen windows, a removed monitor may need a drag back.
-  window=new BrowserWindow({width:1560,height:1050,minWidth:960,minHeight:640,title:'AlphaCode by JABSystems',autoHideMenuBar:true,icon:join(app.getAppPath(),'public','icon.ico'),backgroundColor:'#131619',show:false,webPreferences:{preload:join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
+  window=new BrowserWindow({width:1560,height:1050,minWidth:960,minHeight:640,title:'Multimodel by JABSystems',autoHideMenuBar:true,icon:join(app.getAppPath(),'public','icon.ico'),backgroundColor:'#131619',show:false,webPreferences:{preload:join(__dirname,'preload.js'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
   // Electron applies a rectangle a pixel or two off at fractional display scaling (electron/electron#10862), and a hidden window is
   // worse than a shown one. Restore while hidden, correct once shown, and on close let an unchanged window keep the numbers it was
   // restored from, so the error never compounds across launches.
@@ -120,7 +122,7 @@ async function createWindow():Promise<void>{
   window.webContents.on('will-navigate',event=>event.preventDefault());
   window.once('ready-to-show',()=>{if(!window)return;if(rect)window.setContentBounds(rect);window.show();if(rect)window.setContentBounds(rect);if(last.maximized)window.maximize();restored=JSON.stringify(window.getContentBounds());});
   // Quitting kills the orchestrator and every worker session: make the user say so.
-  window.on('close',event=>{if(run&&dialog.showMessageBoxSync(window!,{type:'warning',buttons:['Keep running','Close and stop the run'],defaultId:0,cancelId:0,title:'Orchestrate is running',message:'Closing AlphaCode ends the orchestrator and every worker.'})===0)event.preventDefault();});
+  window.on('close',event=>{if(run&&dialog.showMessageBoxSync(window!,{type:'warning',buttons:['Keep running','Close and stop the run'],defaultId:0,cancelId:0,title:'Orchestrate is running',message:'Closing Multimodel ends the orchestrator and every worker.'})===0)event.preventDefault();});
   window.on('close',()=>{try{const maximized=window!.isMaximized(),current=maximized?window!.getNormalBounds():window!.getContentBounds();
     // ponytail: a maximized window keeps the rectangle it was restored from; a resize made before maximizing in the same session is not kept.
     const unchanged=maximized||JSON.stringify(current)===restored;writeFileSync(windowPath,JSON.stringify({...(unchanged&&last.width?last:current),maximized}));}catch{/* Geometry is a convenience; never block closing on it. */}});
@@ -133,7 +135,7 @@ if(helperIndex>=0){
   // The helper owns no BrowserWindow, renderer, or IPC handlers.
   app.whenReady().then(()=>runElevatedHelper(process.argv[helperIndex+1]||'',spawn)).catch(error=>{console.error('AlphaCode helper:',(error as Error).message);app.exit(1);});
 }else{
-  app.whenReady().then(async()=>{elevatedApp=isAdministrator();assertNormalToken(elevatedApp);app.setAppUserModelId('com.jabsystems.alphacode');for(const suffix of ['a','b','c','d'])await mkdir(join(DEFAULT_ROOT,'workspaces',`claude-${suffix}`),{recursive:true});registerIpc();await createWindow();void vault.scan();setInterval(()=>void vault.scan(),5*60*1000);}).catch(error=>{dialog.showErrorBox('AlphaCode cannot start',(error as Error).message);app.exit(1);});
+  app.whenReady().then(async()=>{elevatedApp=isAdministrator();assertNormalToken(elevatedApp);app.setAppUserModelId('com.jabsystems.alphacode');for(const suffix of ['a','b','c','d'])await mkdir(join(DEFAULT_ROOT,'workspaces',`claude-${suffix}`),{recursive:true});registerIpc();await createWindow();void vault.scan();setInterval(()=>void vault.scan(),5*60*1000);}).catch(error=>{dialog.showErrorBox('Multimodel cannot start',(error as Error).message);app.exit(1);});
   app.on('window-all-closed',()=>app.quit());
   let quitting=false;
   app.on('before-quit',event=>{if(quitting)return;quitting=true;event.preventDefault();admins.stopAll();providers.cancelAll();Promise.all([run?.stop().catch(()=>{}),terminals.stopAll(),stateStore.flush()]).finally(()=>app.quit());});

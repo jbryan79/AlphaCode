@@ -5,11 +5,13 @@ export interface LocalProfile { id: string; name: string; provider: 'ollama' | '
 export interface PaneConfig { id: string; type: PaneType; title: string; cwd: string; command: string; args: string[]; profileId: string; autoStart: boolean; color?: PaneColor; }
 export interface GridItem { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number; }
 export interface Workspace { id: string; name: string; root: string; panes: PaneConfig[]; layout: GridItem[]; locked: boolean; orchestrate?: OrchestrateConfig; }
-export interface AppState { version: 1; activeWorkspaceId: string; workspaces: Workspace[]; profiles: LocalProfile[]; }
+/** `chat`: the standalone Chat session's folder. `support`: the Support agent's folder, the Multimodel source by default. Both live outside workspaces. */
+export interface AppState { version: 1; activeWorkspaceId: string; workspaces: Workspace[]; profiles: LocalProfile[]; chat?: { cwd: string }; support?: { cwd: string }; }
 /** `tokens`: running total for a Claude pane's session (input, cache writes, cache reads and output), read from its transcript. */
 export interface SessionEvent { paneId: string; kind: 'data' | 'status' | 'tokens'; data?: string; status?: SessionStatus; message?: string; pid?: number; elevated?: boolean; tokens?: number; }
 export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string; }
-export interface AppInfo { version: string; platform: string; statePath: string; appElevated: boolean; root: string; }
+/** `sourceRoot`: the Multimodel source checkout this build came from, or '' when none is found. */
+export interface AppInfo { version: string; platform: string; statePath: string; appElevated: boolean; root: string; sourceRoot: string; }
 export interface VaultInfo { path: string; projects: number; notes: number; obsidian: boolean; scannedAt: string; message: string; }
 export interface VaultGraph { nodes: { id: string; label: string; project: string; type: string }[]; edges: { from: string; to: string }[]; }
 /** `tier`: 0 exact, 1 prefix, 2 contains. Only exact and prefix matches may act without confirmation. */
@@ -18,12 +20,12 @@ export type TaskState = 'planned' | 'working' | 'waiting' | 'attention' | 'done'
 export type TaskModel = 'haiku' | 'sonnet' | 'opus' | 'fable';
 export interface PlanTask { id: string; title: string; files: string[]; model: TaskModel; minutes: number; advisor: boolean; prompt: string; allow?: string[]; dirs?: string[]; }
 export interface Plan { tests: string; approved: boolean; tasks: PlanTask[]; }
-/** Persisted task. `prompt` is never persisted; the run holds it in memory. */
-export interface Task extends Omit<PlanTask, 'prompt'> { state: TaskState; paneId: string; branch: string; worktree: string; startedAt: string; finishedAt: string; retries: number; sessionId: string; message: string; hidden: boolean; }
+/** Persisted task. `prompt` is never persisted; the run holds it in memory. A review task sets `reviews` (the reviewed task id) and, once given, `verdict`. */
+export interface Task extends Omit<PlanTask, 'prompt'> { state: TaskState; paneId: string; branch: string; worktree: string; startedAt: string; finishedAt: string; retries: number; sessionId: string; message: string; hidden: boolean; reviews?: string; verdict?: '' | 'pass' | 'fail'; }
 export interface OrchestrateConfig { on: boolean; orchestratorPaneId: string; maxWorkers: number; approved: boolean; tasks: Task[]; }
 /** `resume`: tasks left `interrupted` by an earlier run, so the new run can list them and retry them with --resume. */
 export interface OrchestrateRoles { workspaceId: string; root: string; orchestratorPaneId: string; workerPaneIds: string[]; advisorPaneIds: string[]; maxWorkers: number; resume?: Task[]; }
-export type OrchestrateEvent = { kind: 'tasks'; approved: boolean; tasks: Task[] } | { kind: 'launch'; paneId: string } | { kind: 'finished'; summary: string } | { kind: 'error'; message: string } | { kind: 'off' };
+export type OrchestrateEvent = { kind: 'tasks'; approved: boolean; finished: string; tasks: Task[] } | { kind: 'launch'; paneId: string } | { kind: 'finished'; summary: string } | { kind: 'error'; message: string } | { kind: 'off' };
 export interface BridgeApi {
   loadState(): Promise<AppState | null>;
   saveState(state: AppState): Promise<void>;

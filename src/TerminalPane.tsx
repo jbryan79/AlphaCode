@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { Play, RotateCcw, Square, Shield } from 'lucide-react';
+import { Hourglass, Play, RotateCcw, Square, Shield } from 'lucide-react';
 import type { PaneConfig, SessionStatus } from '../shared/types';
 import '@xterm/xterm/css/xterm.css';
 
-export default function TerminalPane({pane,status,focused,message,relaunch=0,locked=false,onError}: {pane:PaneConfig;locked?:boolean;status:SessionStatus;focused:boolean;message?:string;relaunch?:number;onError:(s:string)=>void}) {
+/** `held`: the pane belongs to an Orchestrate run and only the run starts it. No auto-start, no Start or Restart; `relaunch` still starts it. */
+export default function TerminalPane({pane,status,focused,message,relaunch=0,locked=false,held,onError}: {pane:PaneConfig;locked?:boolean;status:SessionStatus;focused:boolean;message?:string;relaunch?:number;held?:{title:string;detail:string};onError:(s:string)=>void}) {
   const host=useRef<HTMLDivElement>(null),terminal=useRef<Terminal|null>(null),fit=useRef<FitAddon|null>(null),config=useRef(pane);
   const [launching,setLaunching]=useState(false); config.current=pane;
   const start=async()=>{
@@ -14,7 +15,7 @@ export default function TerminalPane({pane,status,focused,message,relaunch=0,loc
     catch(e){onError(String(e));} finally{setLaunching(false);}
   };
   useEffect(()=>{
-    const term=new Terminal({fontFamily:'Cascadia Mono, Consolas, monospace',fontSize:12,lineHeight:1.2,scrollback:5000,cursorBlink:true,allowProposedApi:false,theme:{background:'#101214',foreground:'#dce2e8',cursor:'#b6cde2',selectionBackground:'#3c5068',black:'#21252b',red:'#e18b83',green:'#9cbf9b',yellow:'#d8ae68',blue:'#8cb7df',magenta:'#b59fcc',cyan:'#88bdc7',white:'#dce2e8'}});
+    const term=new Terminal({fontFamily:'Cascadia Mono, Consolas, monospace',fontSize:12,lineHeight:1.2,scrollback:5000,cursorBlink:true,allowProposedApi:false,theme:{background:'#0c0d0e',foreground:'#e8e8e8',cursor:'#b6cde2',selectionBackground:'#3c5068',black:'#21252b',red:'#e18b83',green:'#9cbf9b',yellow:'#d8ae68',blue:'#8cb7df',magenta:'#b59fcc',cyan:'#88bdc7',white:'#dce2e8'}});
     const addon=new FitAddon(); term.loadAddon(addon); term.open(host.current!); terminal.current=term; fit.current=addon;
     const unsubscribe=window.bridge.onSessionEvent(event=>{
       if(event.paneId!==pane.id)return;
@@ -33,7 +34,7 @@ export default function TerminalPane({pane,status,focused,message,relaunch=0,loc
       if(e.type==='keydown'&&e.ctrlKey&&e.shiftKey&&e.code==='KeyV'){navigator.clipboard.readText().then(text=>term.paste(text)).catch(()=>{});return false;}
       return true;
     });
-    if(pane.autoStart)void start();
+    if(pane.autoStart&&!held)void start();
     return()=>{unsubscribe();input.dispose();observer.disconnect();term.dispose();terminal.current=null;};
   },[]);
   // disableStdin drops keyboard and paste only; xterm's own replies to the program still go through.
@@ -43,7 +44,8 @@ export default function TerminalPane({pane,status,focused,message,relaunch=0,loc
   const active=['running','starting'].includes(status)||launching;
   return <div className="terminal-content">
     <div ref={host} className="xterm-host" aria-label={`${pane.title} terminal`} />
-    {(status==='idle'||status==='exited'||status==='error')&&!launching&&<div className="terminal-empty">
+    {held&&(status==='idle'||status==='exited'||status==='error')&&!launching&&<div className="terminal-empty held"><Hourglass size={22}/><strong>{held.title}</strong><span>{held.detail}</span></div>}
+    {!held&&(status==='idle'||status==='exited'||status==='error')&&!launching&&<div className="terminal-empty">
       {pane.type==='powershell-admin'?<Shield size={22}/>:<Play size={22}/>}
       <strong>{pane.type==='powershell-admin'?'Start an elevated session':status==='error'?'Session needs attention':status==='exited'?'Session ended':'Ready to start'}</strong>
       <span>{pane.type==='powershell-admin'?'Windows will ask for permission. Only this pane elevates.':pane.type==='claude'&&status==='exited'?'Claude Code closed. If you saw its folder-trust prompt, use the arrow keys to select "Yes, I trust this folder" before pressing Enter; the highlighted default is "No, exit".':message||`${pane.type==='custom'?pane.command||'Configure an executable':pane.type} in its own working directory`}</span>
@@ -52,7 +54,7 @@ export default function TerminalPane({pane,status,focused,message,relaunch=0,loc
     {launching&&pane.type==='powershell-admin'&&<div className="terminal-empty"><Shield size={22}/><strong>Waiting for Windows permission</strong><span>Approve or cancel the UAC prompt.</span><button onClick={()=>void window.bridge.stopSession(pane.id)}>Cancel launch</button></div>}
     <div className="terminal-footer"><span>{pane.type==='powershell-admin'?'Elevated PowerShell':'Independent terminal'}{status==='running'?' · Ctrl+C to interrupt':''}</span>
       <button title="Clear terminal" aria-label={`Clear ${pane.title}`} onClick={()=>terminal.current?.clear()}>Clear</button>
-      {active?<button aria-label={`Stop ${pane.title}`} onClick={()=>window.bridge.stopSession(pane.id).catch(e=>onError(String(e)))}><Square size={11}/>Stop</button>:<button aria-label={`Restart ${pane.title}`} onClick={()=>void start()}><RotateCcw size={11}/>Restart</button>}
+      {active?<button aria-label={`Stop ${pane.title}`} onClick={()=>window.bridge.stopSession(pane.id).catch(e=>onError(String(e)))}><Square size={11}/>Stop</button>:held?null:<button aria-label={`Restart ${pane.title}`} onClick={()=>void start()}><RotateCcw size={11}/>Restart</button>}
     </div>
   </div>;
 }

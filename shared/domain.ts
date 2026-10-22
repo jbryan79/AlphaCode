@@ -65,6 +65,28 @@ export function applyPreset(w: Workspace, count: typeof PRESETS[number], pad: Pa
   const panes=w.panes.slice(0,count); while(panes.length<count)panes.push(createPane(pad,w.root));
   return {...w,panes,layout:balancedLayout(panes)};
 }
+/** Orchestrate's layout: the orchestrator plus exactly `workers` other Claude panes (existing ones first, then new ones). Non-Claude panes stay; they never run Claude. */
+export function orchestrateLayout(w: Workspace, orchestratorId: string, workers: number): Workspace {
+  let kept=0; const panes=w.panes.filter(p=>p.type!=='claude'||p.id===orchestratorId||kept++<workers);
+  while(panes.filter(p=>p.type==='claude'&&p.id!==orchestratorId).length<workers)panes.push(createPane('claude',w.root));
+  return {...w,panes,layout:conductorLayout(panes,orchestratorId||panes.find(p=>p.type==='claude')?.id||'')};
+}
+/** Panes that take part in a run: every Claude pane (orchestrator and workers) and the local-model advisors. */
+export const inRun = (p: PaneConfig) => p.type==='claude'||p.type==='local-model';
+/**
+ * Run layout. The run's panes get the conductor grid: the orchestrator a full-height column, the rest tiled beside it.
+ * Grid sums (12 columns): no others -> 12; one or two -> 6 + 6; three or more -> 4 + 2 x 4, a lone last pane spanning 8.
+ * Side panes keep a balanced grid of their own, since the app shows the two groups one at a time.
+ */
+export function conductorLayout(panes: PaneConfig[], orchestratorId: string): GridItem[] {
+  const lead=panes.find(p=>p.id===orchestratorId);if(!lead)return balancedLayout(panes);
+  const run=panes.filter(p=>inRun(p)&&p.id!==lead.id),side=panes.filter(p=>!inRun(p));
+  const at=new Map<string,GridItem>(),cols=run.length>=3?2:1,rows=Math.max(1,Math.ceil(run.length/cols)),leadW=run.length===0?12:run.length<3?6:4,cellW=(12-leadW)/cols;
+  at.set(lead.id,{i:lead.id,x:0,y:0,w:leadW,h:rows*4,minW:3,minH:3});
+  run.forEach((p,n)=>{const lone=cols===2&&n===run.length-1&&run.length%2===1;at.set(p.id,{i:p.id,x:leadW+(n%cols)*cellW,y:Math.floor(n/cols)*4,w:lone?12-leadW:cellW,h:4,minW:3,minH:3});});
+  balancedLayout(side).forEach(l=>at.set(l.i,l));
+  return panes.map(p=>at.get(p.id)!);
+}
 
 export function string(value: unknown, name: string, max=4096): string {
   if(typeof value!=='string'||value.length>max||value.includes('\0')) throw new Error(`Invalid ${name}`); return value;
@@ -101,5 +123,7 @@ export function validateState(value: unknown): AppState {
   const workspaces=s.workspaces.map(validateWorkspace),profiles=s.profiles.map(validateProfile); const activeWorkspaceId=validateId(s.activeWorkspaceId);
   if(!workspaces.some(w=>w.id===activeWorkspaceId)||new Set(workspaces.map(w=>w.id)).size!==workspaces.length||new Set(profiles.map(p=>p.id)).size!==profiles.length)throw new Error('Invalid workspace or profile IDs');
   const allIds=workspaces.flatMap(w=>w.panes.map(p=>p.id)); if(new Set(allIds).size!==allIds.length)throw new Error('Pane IDs must be globally unique');
-  return {version:1,activeWorkspaceId,workspaces,profiles};
+  const folder=(v:unknown,name:string)=>v===undefined?undefined:{cwd:string((v as {cwd:unknown})?.cwd,name)};
+  const chat=folder(s.chat,'chat folder'),support=folder(s.support,'support folder');
+  return {version:1,activeWorkspaceId,workspaces,profiles,...(chat?{chat}:{}),...(support?{support}:{})};
 }

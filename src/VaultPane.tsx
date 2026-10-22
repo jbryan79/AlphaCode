@@ -37,7 +37,7 @@ export default function VaultPane({pane,profiles,workspaces,onProfile,onEditProf
     <VaultGraph graph={graph} thinking={busy} highlight={highlight} pulse={pulse}/>
     <div className="chat-transcript" ref={scroll}>
       {!entries.length&&<div className="local-welcome"><Brain size={22}/><strong>Claude memory vault</strong><span>{graph?`${notes} notes across ${hubs} projects`:'Loading vault…'}</span><p>Ask about anything Claude remembers, or type "launch &lt;project&gt;".</p></div>}
-      {entries.map((m,i)=><div className={`chat-message ${m.role}`} key={i}><span className="speaker">{m.role==='user'?'You':m.role==='system'?'AlphaCode':'Vault'}</span><pre>{m.content}</pre>{m.notes?.length?<div className="note-chips">{m.notes.map(n=><button type="button" key={n} className="note-chip" onClick={()=>setPulse(`${n}:${Date.now()}`)}>{n}</button>)}</div>:null}</div>)}
+      {entries.map((m,i)=><div className={`chat-message ${m.role}`} key={i}><span className="speaker">{m.role==='user'?'You':m.role==='system'?'Multimodel':'Vault'}</span><pre>{m.content}</pre>{m.notes?.length?<div className="note-chips">{m.notes.map(n=><button type="button" key={n} className="note-chip" onClick={()=>setPulse(`${n}:${Date.now()}`)}>{n}</button>)}</div>:null}</div>)}
       {busy&&<div className="thinking">Reading the vault…</div>}
       {error&&<div className="inline-error" role="alert">{error}</div>}
     </div>

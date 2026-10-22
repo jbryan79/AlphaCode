@@ -8,14 +8,21 @@ const USAGE = `usage: alphacode <command>
   task status [id]                        state, elapsed seconds, branch, last lines
   task wait [id ...] [--timeout <s>]      block until a listed task changes (max 240 s)
   task retry <id> <feedback.md>           send feedback to the worker, keeping its context
+  task review <id> <criteria.md> [--model m]  start a fresh read-only reviewer on a done task
   ask <paneId> <prompt.md>                ask a Local Model (advisor) pane
   finish <report.md>                      mark the run done, toast, vault note
-  report done|failed|stop|waiting [msg]   worker only: report this pane's own status`;
+  report done|failed|stop|waiting [msg]   worker only: report this pane's own status
+  verdict pass|fail <<'EOF' ... EOF       reviewer only: the verdict, findings on stdin`;
 
 async function stdinJson(stdin: NodeJS.ReadableStream | null): Promise<any> {
   if (!stdin || (stdin as any).isTTY) return {};
   const text = await Promise.race([new Promise<string>(r => { let s = ''; stdin.on('data', c => { s += c; }); stdin.on('end', () => r(s)); stdin.on('error', () => r(s)); }), new Promise<string>(r => setTimeout(() => { stdin.pause(); r(''); }, 300))]);
   try { return text.trim() ? JSON.parse(text) : {}; } catch { return {}; }
+}
+/** All of stdin (a heredoc); a terminal or a pipe left open past 10 s gives what arrived so far. */
+async function stdinText(stdin: NodeJS.ReadableStream | null): Promise<string> {
+  if (!stdin || (stdin as any).isTTY) return '';
+  return Promise.race([new Promise<string>(r => { let s = ''; stdin.on('data', c => { s += c; }); stdin.on('end', () => r(s)); stdin.on('error', () => r(s)); }), new Promise<string>(r => setTimeout(() => { stdin.pause(); r(''); }, 10000))]);
 }
 const text = async (file: string, max: number) => { const t = await readFile(resolve(file), 'utf8'); if (t.length > max) throw new Error(`${file} exceeds ${max} characters`); return t; };
 
@@ -27,6 +34,12 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, stdin: NodeJS
       const [kind, ...msg] = rest; if (!['done', 'failed', 'stop', 'waiting'].includes(kind || '')) throw new Error(USAGE);
       const input = await stdinJson(stdin);
       return await send(url || '', token, 'POST', '/report', { paneId, kind, message: msg.join(' '), notificationType: input.notification_type });
+    }
+    if (cmd === 'verdict') {
+      const url = env.ALPHACODE_CONTROL_URL, token = env.ALPHACODE_HOOK_TOKEN, paneId = env.ALPHACODE_PANE_ID; if (!token || !paneId) throw new Error('verdict runs only inside a reviewer pane (ALPHACODE_HOOK_TOKEN and ALPHACODE_PANE_ID are set there)');
+      const [verdict] = rest; if (verdict !== 'pass' && verdict !== 'fail') throw new Error(USAGE);
+      const findings = (await stdinText(stdin)).trim(); if (!findings) throw new Error(`verdict reads the findings from stdin: alphacode verdict ${verdict} <<'EOF' ... EOF`);
+      return await send(url || '', token, 'POST', '/verdict', { paneId, verdict, findings });
     }
     const url = env.ALPHACODE_CONTROL_URL, token = env.ALPHACODE_CONTROL_TOKEN; if (!url || !token) throw new Error('ALPHACODE_CONTROL_URL and ALPHACODE_CONTROL_TOKEN are missing; alphacode runs inside the orchestrator pane');
     const api = (method: string, path: string, body?: unknown) => send(url, token, method, path, body);
@@ -40,6 +53,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, stdin: NodeJS
         if (sub === 'status') return await api('GET', a[0] ? `/tasks/${a[0]}` : '/tasks');
         if (sub === 'wait') { const timeout = flag('--timeout'); return await api('GET', `/tasks/wait?ids=${encodeURIComponent(rest.slice(1).join(','))}&timeout=${encodeURIComponent(timeout || '240')}`); }
         if (sub === 'retry' && a[0] && a[1]) return await api('POST', `/tasks/${a[0]}/retry`, { feedback: await text(a[1], 65536) });
+        if (sub === 'review') { const model = flag('--model'); const [id, file] = rest.slice(1); if (id && file) return await api('POST', `/tasks/${id}/review`, { criteria: await text(file, 65536), ...(model ? { model } : {}) }); }
         throw new Error(USAGE); }
       case 'ask': if (rest[0] && rest[1]) return await api('POST', `/ask/${rest[0]}`, { prompt: await text(rest[1], 262144) }); throw new Error(USAGE);
       case 'finish': if (rest[0]) return await api('POST', '/finish', { report: await text(rest[0], 1048576) }); throw new Error(USAGE);
